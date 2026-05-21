@@ -1,0 +1,32 @@
+[
+  {
+    "content": "测试体系：单元测试 (pytest + jest)、接口自动化 (pytest + httpx)、端到端 (Playwright)、性能 (k6)。要求新接口必须 ≥ 80% 覆盖率才能合入。",
+    "type": "process",
+    "date": "2026-05-01"
+  },
+  {
+    "content": "测试环境：dev / staging / pre-prod 三套环境。CI 使用 GitHub Actions，每次 PR 跑全量单测，合入 main 后跑 E2E。",
+    "type": "process",
+    "date": "2026-05-02"
+  },
+  {
+    "content": "认证模块测试用例：登录成功、错误密码 5 次锁定、过期 token 401、refresh 流程、SQL 注入防护、暴力破解防护（限速 5/min）。",
+    "type": "test_case",
+    "date": "2026-05-12"
+  },
+  {
+    "content": "工作日志 2026-05-19：完成 auth 模块自动化测试 23 条用例，全部通过。发现 bug #142：refresh_token 过期后接口返回 500 而非 401，已提交后端修复。",
+    "type": "log",
+    "date": "2026-05-19"
+  },
+  {
+    "content": "线上故障复盘：2026-04-30 因数据库主从延迟导致测试遗漏了读写分离场景。后续测试需覆盖主从延迟场景与降级路径。",
+    "type": "post_mortem",
+    "date": "2026-04-30"
+  },
+  {
+    "content": "测试通用清单：边界值、空值、特殊字符、并发冲突、网络异常、权限越权、幂等性、回滚事务。设计用例时逐条对照。",
+    "type": "checklist",
+    "date": "2026-04-20"
+  }
+]

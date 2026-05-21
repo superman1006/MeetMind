@@ -1,0 +1,32 @@
+[
+  {
+    "content": "项目整体架构决策：采用前后端分离 + 微服务架构，核心服务包括 auth-service、user-service、project-service、task-service、notification-service。所有服务通过 API Gateway 暴露，使用 JWT 鉴权。",
+    "type": "architecture",
+    "date": "2026-05-10"
+  },
+  {
+    "content": "技术选型：后端 Python FastAPI + PostgreSQL，前端 React 18 + TypeScript + Vite，部署使用 Docker Compose（开发） / Kubernetes（生产）。日志采用 ELK，监控采用 Prometheus + Grafana。",
+    "type": "architecture",
+    "date": "2026-05-11"
+  },
+  {
+    "content": "团队协作规范：所有需求通过架构师确认后分发；后端负责 API 设计与数据建模，前端负责 UI/交互，测试负责自动化用例与回归，PM 负责需求澄清与优先级排序。",
+    "type": "process",
+    "date": "2026-05-12"
+  },
+  {
+    "content": "工作日志 2026-05-18：完成 auth 模块代码评审，批准上线。下一步是 project-service 的接口设计评审。",
+    "type": "log",
+    "date": "2026-05-18"
+  },
+  {
+    "content": "架构约束：所有新服务必须支持水平扩展、统一日志格式、健康检查接口 /healthz，并接入链路追踪 (OpenTelemetry)。",
+    "type": "architecture",
+    "date": "2026-05-15"
+  },
+  {
+    "content": "已知技术债：旧版本通知服务使用同步推送，需在 Q3 之前迁移到消息队列 (Kafka) 异步推送，降低耦合。",
+    "type": "tech_debt",
+    "date": "2026-05-08"
+  }
+]
