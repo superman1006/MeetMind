@@ -1,4 +1,4 @@
-"""Frontend Engineer agent."""
+"""前端工程师 Agent。"""
 
 from __future__ import annotations
 
@@ -23,5 +23,6 @@ class FrontendAgent(BaseAgent):
             "  - 用页面流程图描述、组件树、状态机、关键代码示意来表达方案。\n"
             "  - 保持现有 React + TypeScript + Ant Design 风格一致。\n"
             "  - 明确告知 PM 任何模糊的交互细节，避免后期返工。\n\n"
-            "结束发言后通常应把发言权交回 architect 汇总。"
+            "结束发言后通常应把发言权交回 architect 汇总。\n"
+            "回复内容长度: 不要太长，控制在 150 字以内。"
         )

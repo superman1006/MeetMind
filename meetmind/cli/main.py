@@ -1,4 +1,4 @@
-"""Interactive CLI entry point for MeetMind."""
+"""MeetMind 的交互式 CLI 入口。"""
 
 from __future__ import annotations
 
@@ -17,8 +17,8 @@ from meetmind.utils.formatting import format_separator, get_console, print_syste
 from meetmind.utils.logger import get_logger, setup_logging
 
 
-# Force UTF-8 on stdin/stdout so that Chinese input from terminals with a
-# non-UTF-8 locale doesn't produce surrogate code points that crash httpx.
+# 强制 stdin/stdout 使用 UTF-8，避免非 UTF-8 区域设置的终端
+# 输入中文时产生代理码点导致 httpx 崩溃。
 for stream in (sys.stdin, sys.stdout, sys.stderr):
     reconfigure = getattr(stream, "reconfigure", None)
     if reconfigure is not None:
@@ -33,6 +33,7 @@ console: Console = get_console()
 
 
 def _print_banner() -> None:
+    """打印应用横幅和 Agent 角色介绍。"""
     console.print(
         Panel.fit(
             "[bold cyan]MeetMind[/bold cyan]   多 Agent RAG 协作系统\n"
@@ -48,7 +49,7 @@ def _print_banner() -> None:
 
 
 def _bootstrap() -> None:
-    """Validate config, set up logging, seed databases."""
+    """校验配置、初始化日志、播种数据库。"""
     setup_logging()
     settings = get_settings()
 
@@ -91,8 +92,8 @@ def _bootstrap() -> None:
 
 
 def _run_one_discussion(graph, requirement: str) -> AgentState:
-    """Stream one architect-led discussion using `stream_mode='values'` so we
-    can capture the final cumulative state."""
+    """使用 `stream_mode='values'` 流式运行一轮由架构师主导的讨论，
+    以获取最终累积状态。"""
     initial_state: AgentState = {
         "requirement": requirement,
         "messages": [],
@@ -120,7 +121,7 @@ def _run_one_discussion(graph, requirement: str) -> AgentState:
 
 
 def _architect_review(state: AgentState) -> bool:
-    """Let the human architect decide whether to continue. Returns True to continue."""
+    """由人类架构师决定是否继续；返回 True 表示继续。"""
     msgs = state.get("messages") or []
     n_turns = len(msgs)
     complete = state.get("complete", False)

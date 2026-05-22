@@ -1,4 +1,4 @@
-"""Centralized logging setup using rich for pretty CLI output."""
+"""使用 rich 的集中式日志配置，用于美观的 CLI 输出。"""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ _LOGGING_CONFIGURED = False
 
 
 def setup_logging() -> None:
-    """Configure root logger with RichHandler. Idempotent."""
+    """使用 RichHandler 配置根日志器。幂等。"""
     global _LOGGING_CONFIGURED
     if _LOGGING_CONFIGURED:
         return
@@ -32,8 +32,8 @@ def setup_logging() -> None:
             )
         ],
     )
-    # Silence overly chatty libraries. chromadb stays at INFO so the
-    # one-time embedding-model download is visible to the user.
+    # 降低过于冗长的第三方库日志级别。chromadb 保持 INFO，
+    # 以便用户能看到一次性 embedding 模型下载。
     for noisy in ("httpx", "urllib3", "openai", "httpcore"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
@@ -41,6 +41,6 @@ def setup_logging() -> None:
 
 
 def get_logger(name: str) -> logging.Logger:
-    """Return a logger; ensures logging has been configured."""
+    """返回 logger；确保日志已配置。"""
     setup_logging()
     return logging.getLogger(name)

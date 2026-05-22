@@ -1,4 +1,4 @@
-"""Configuration management."""
+"""配置管理。"""
 
 from meetmind.config.settings import Settings, get_settings
 from meetmind.config.constants import (

@@ -1,4 +1,4 @@
-"""Product Manager agent."""
+"""产品经理 Agent。"""
 
 from __future__ import annotations
 
@@ -23,5 +23,6 @@ class PMAgent(BaseAgent):
             "  - 用『用户故事 + 验收标准』结构表达需求。\n"
             "  - 参考 RAG 中的用户研究、竞品分析、roadmap 给出依据。\n"
             "  - 当后端/前端讨论陷入实现细节时，及时回到用户价值视角。\n\n"
-            "结束发言后通常应把发言权交回 architect 汇总。"
+            "结束发言后通常应把发言权交回 architect 汇总。\n"
+            "回复内容长度: 不要太长，控制在 150 字以内。"
         )

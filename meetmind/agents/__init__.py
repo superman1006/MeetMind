@@ -1,4 +1,4 @@
-"""Agent implementations for MeetMind."""
+"""MeetMind 的 Agent 实现。"""
 
 from meetmind.agents.base import AgentResponse, BaseAgent
 from meetmind.agents.architect import ArchitectAgent

@@ -1,4 +1,4 @@
-"""TypedDict definitions for the LangGraph state."""
+"""LangGraph 状态的 TypedDict 定义。"""
 
 from __future__ import annotations
 
@@ -10,21 +10,21 @@ class MessageTurn(TypedDict):
     agent_name: str
     role: str
     message: str
-    output_role: str | None  # which agent should respond next, None if done
+    output_role: str | None  # 下一响应该由哪个 agent 负责，完成时为 None
 
 
 class AgentState(TypedDict, total=False):
-    # Architect input
+    # 架构师输入,同一个会话中不变
     requirement: str
 
-    # Append-only discussion log
+    # 仅追加的讨论记录
     messages: Annotated[list[MessageTurn], add]
 
-    # Routing: next agent to invoke (set by previous node)
+    # 路由：下一待调用的 agent（由上一节点设置）
     next_agent: str | None
 
-    # Completion signal — set by architect when work is done
+    # 完成信号 — 工作完成时由架构师设置
     complete: bool
 
-    # Safety: cap on graph iterations
+    # 安全：图迭代次数上限
     iteration: int

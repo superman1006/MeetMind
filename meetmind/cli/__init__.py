@@ -1,1 +1,1 @@
-"""CLI entry point."""
+"""CLI 入口。"""

@@ -1,4 +1,4 @@
-"""Output formatting helpers for the CLI."""
+"""CLI 输出格式化辅助函数。"""
 
 from __future__ import annotations
 
@@ -33,14 +33,14 @@ def format_separator(title: str = "", char: str = "=", width: int = 70) -> str:
     return f"{char * left} {title} {char * right}"
 
 
-def format_agent_output(
+def format_output_agentInfo(
     agent_name: str,
     message: str,
     next_role: str | None = None,
     used_rag: bool = False,
     rag_sources: list[str] | None = None,
 ) -> None:
-    """Render an agent's response as a styled rich panel."""
+    """将 agent 回复渲染为带样式的 rich 面板。这个函数只在 console 输出信息,并不处理消息中的路由指令等逻辑"""
     color = ROLE_COLORS.get(agent_name, "white")
     role_desc = ROLE_DESCRIPTIONS.get(agent_name, agent_name)
 

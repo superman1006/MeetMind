@@ -1,4 +1,4 @@
-"""Architect / Tech Lead — orchestrates the discussion."""
+"""架构师 / Tech Lead — 主持讨论。"""
 
 from __future__ import annotations
 
@@ -27,5 +27,6 @@ class ArchitectAgent(BaseAgent):
             "判断 [DONE] 的标准：\n"
             "  - 需求已被拆解为明确任务；\n"
             "  - 关键角色 (PM 澄清、Backend 接口、Frontend 交互、Tester 用例) 都已表态；\n"
-            "  - 没有遗留的阻塞性问题。"
+            "  - 没有遗留的阻塞性问题。\n"
+            "回复内容长度: 不要太长，控制在 150 字以内。"
         )

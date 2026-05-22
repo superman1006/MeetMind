@@ -1,4 +1,4 @@
-"""Chroma persistent client management — one isolated DB per agent."""
+"""Chroma 持久化客户端管理 — 每个 agent 独立数据库。"""
 
 from __future__ import annotations
 
@@ -22,13 +22,15 @@ def _agent_db_dir(agent_name: str) -> Path:
 
 @lru_cache(maxsize=None)
 def get_agent_client(agent_name: str) -> ClientAPI:
-    """Return a cached PersistentClient pointing at the agent's directory."""
+    """返回指向该 agent 目录的缓存 PersistentClient。"""
+    # PersistentClient 是 Chroma 的嵌入式模式（chromadb 提供的底层能力），对应本地 SQLite 文件
     return chromadb.PersistentClient(path=str(_agent_db_dir(agent_name)))
 
 
 def get_agent_collection(agent_name: str) -> Collection:
-    """Return (creating if needed) the agent's knowledge collection."""
+    """返回（必要时创建）该 agent 的知识集合。"""
     client = get_agent_client(agent_name)
+    # 拿到客户端后, 在数据库中创建一个自己的表,一个 agent 对应一个表,create 只是创建,并没有把 doc 存进去
     return client.get_or_create_collection(
         name=collection_name_for(agent_name),
         metadata={"description": f"{agent_name} agent knowledge base"},
