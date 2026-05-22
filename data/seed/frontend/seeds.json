@@ -1,0 +1,32 @@
+[
+  {
+    "content": "前端技术栈：React 18 + TypeScript + Vite，状态管理使用 Zustand，路由 React Router 6，HTTP 客户端 axios + react-query，UI 组件库 Ant Design 5。",
+    "type": "code",
+    "date": "2026-05-01"
+  },
+  {
+    "content": "项目目录结构：src/pages（页面）、src/components（通用组件）、src/hooks（自定义 hook）、src/api（接口封装）、src/store（Zustand store）、src/utils。",
+    "type": "code",
+    "date": "2026-05-02"
+  },
+  {
+    "content": "认证页面已实现：登录、注册、忘记密码。token 持久化到 httpOnly cookie + localStorage 兜底。请求拦截器自动附加 Bearer。",
+    "type": "code",
+    "date": "2026-05-11"
+  },
+  {
+    "content": "工作日志 2026-05-19：完成项目列表页 + 项目详情页骨架，react-query 缓存策略 staleTime=30s。还需要联调权限相关。",
+    "type": "log",
+    "date": "2026-05-19"
+  },
+  {
+    "content": "UI 设计规范：主色 #1677FF，圆角 6px，组件间距 16px。表单使用 Ant Design Form + zod 校验。Loading 用 Skeleton，空状态用 Empty。",
+    "type": "design",
+    "date": "2026-04-28"
+  },
+  {
+    "content": "性能优化：路由懒加载 React.lazy + Suspense；大列表使用 react-window 虚拟滚动；图片懒加载 + WebP；Vite chunk 拆分。",
+    "type": "best_practice",
+    "date": "2026-05-08"
+  }
+]

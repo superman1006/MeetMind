@@ -1,0 +1,835 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>MeetMind · 项目架构图</title>
+<style>
+  :root {
+    --bg: #0b1220;
+    --bg-2: #111a2e;
+    --panel: #16213a;
+    --panel-2: #1d2a47;
+    --line: #28365a;
+    --fg: #e6edf7;
+    --muted: #8aa0c4;
+    --accent: #38bdf8;
+
+    /* 与 CLI ROLE_COLORS 对齐 */
+    --architect: #c084fc;
+    --backend:   #4ade80;
+    --frontend:  #22d3ee;
+    --tester:    #fbbf24;
+    --pm:        #60a5fa;
+    --system:    #94a3b8;
+
+    --module-config:  #f472b6;
+    --module-graph:   #34d399;
+    --module-db:      #fb923c;
+    --module-agents:  #a78bfa;
+    --module-utils:   #fde047;
+    --module-cli:     #38bdf8;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+                 "Helvetica Neue", Arial, sans-serif;
+    line-height: 1.55;
+  }
+  code, pre, .mono {
+    font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.92em;
+  }
+  header.hero {
+    padding: 56px 24px 32px;
+    background: radial-gradient(1200px 400px at 20% 0%, #1b2952 0%, var(--bg) 60%);
+    border-bottom: 1px solid var(--line);
+  }
+  header.hero h1 {
+    margin: 0 0 6px; font-size: 36px;
+    background: linear-gradient(90deg, #93c5fd, #c084fc, #4ade80);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  header.hero p { color: var(--muted); margin: 0; font-size: 15px; }
+  header.hero .meta { margin-top: 14px; font-size: 13px; color: var(--muted); }
+  header.hero .meta b { color: var(--fg); }
+
+  main { max-width: 1280px; margin: 0 auto; padding: 32px 24px 80px; }
+
+  section { margin-top: 48px; }
+  section h2 {
+    margin: 0 0 16px;
+    font-size: 22px;
+    padding-left: 12px;
+    border-left: 4px solid var(--accent);
+  }
+  section .desc { color: var(--muted); margin: 0 0 18px; font-size: 14px; }
+
+  /* ===== 目录树 ===== */
+  .tree {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 18px 22px; overflow-x: auto;
+  }
+  .tree pre { margin: 0; color: var(--fg); }
+  .tree .comment { color: var(--muted); }
+  .tree .dir { color: var(--accent); font-weight: 600; }
+  .tree .file-py { color: #fde68a; }
+  .tree .file-json { color: #86efac; }
+  .tree .file-cfg { color: #fbbf24; }
+  .tree .hl-architect { color: var(--architect); }
+  .tree .hl-backend { color: var(--backend); }
+  .tree .hl-frontend { color: var(--frontend); }
+  .tree .hl-tester { color: var(--tester); }
+  .tree .hl-pm { color: var(--pm); }
+
+  /* ===== mermaid 容器 ===== */
+  .diagram {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 22px 18px;
+    overflow-x: auto;
+  }
+  .diagram .mermaid { text-align: center; }
+
+  /* ===== 模块卡片 ===== */
+  .modules {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+    gap: 18px;
+  }
+  .mcard {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    overflow: hidden;
+    display: flex; flex-direction: column;
+  }
+  .mcard header {
+    display: flex; align-items: center; gap: 10px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel-2);
+  }
+  .mcard header .dot {
+    width: 10px; height: 10px; border-radius: 50%;
+  }
+  .mcard header .path {
+    color: var(--fg); font-weight: 600; font-size: 14px;
+  }
+  .mcard header .tag {
+    margin-left: auto; font-size: 11px;
+    color: var(--muted);
+    border: 1px solid var(--line); padding: 2px 8px; border-radius: 999px;
+  }
+  .mcard .body { padding: 12px 16px 16px; }
+  .mcard .body p.note {
+    margin: 0 0 10px; font-size: 13px; color: var(--muted);
+  }
+  .mcard ul { padding: 0; margin: 0; list-style: none; }
+  .mcard li {
+    padding: 7px 0;
+    border-bottom: 1px dashed rgba(255,255,255,0.06);
+    font-size: 13px;
+  }
+  .mcard li:last-child { border-bottom: none; }
+  .mcard .fn { color: #fde68a; }
+  .mcard .args { color: #93c5fd; }
+  .mcard .ret { color: #6ee7b7; }
+  .mcard .kw  { color: #c4b5fd; }
+  .mcard .cmt { color: var(--muted); font-style: italic; }
+
+  /* 模块色块 */
+  .mod-config  .dot { background: var(--module-config); }
+  .mod-config  header .tag { color: var(--module-config); border-color: var(--module-config); }
+  .mod-graph   .dot { background: var(--module-graph); }
+  .mod-graph   header .tag { color: var(--module-graph); border-color: var(--module-graph); }
+  .mod-db      .dot { background: var(--module-db); }
+  .mod-db      header .tag { color: var(--module-db); border-color: var(--module-db); }
+  .mod-agents  .dot { background: var(--module-agents); }
+  .mod-agents  header .tag { color: var(--module-agents); border-color: var(--module-agents); }
+  .mod-utils   .dot { background: var(--module-utils); }
+  .mod-utils   header .tag { color: var(--module-utils); border-color: var(--module-utils); }
+  .mod-cli     .dot { background: var(--module-cli); }
+  .mod-cli     header .tag { color: var(--module-cli); border-color: var(--module-cli); }
+
+  /* ===== 数据结构表 ===== */
+  table.state-tbl {
+    width: 100%; border-collapse: collapse;
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; overflow: hidden;
+  }
+  .state-tbl th, .state-tbl td {
+    padding: 10px 14px; text-align: left;
+    border-bottom: 1px solid var(--line);
+    font-size: 14px;
+  }
+  .state-tbl th { background: var(--panel-2); color: var(--muted); font-weight: 600; }
+  .state-tbl td.mono { color: #fde68a; }
+  .state-tbl tr:last-child td { border-bottom: none; }
+
+  /* ===== 图例 ===== */
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 14px;
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 14px 18px; font-size: 13px;
+  }
+  .legend .item { display: flex; align-items: center; gap: 6px; }
+  .legend .swatch { width: 12px; height: 12px; border-radius: 3px; }
+
+  footer.foot {
+    margin-top: 60px; padding: 24px;
+    text-align: center; color: var(--muted); font-size: 13px;
+    border-top: 1px solid var(--line);
+  }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <h1>🧠 MeetMind 项目架构图</h1>
+  <p>多 Agent RAG 协作系统 · LangChain + LangGraph + Chroma · OpenAI-compatible LLM</p>
+  <div class="meta">
+    入口：<code><b>python main.py</b></code> → <code><b>meetmind.cli.main:main()</b></code>
+    &nbsp;·&nbsp; 文件总览：<b>5 个角色 Agent · 4 大模块（agents / database / graph / utils）</b>
+  </div>
+</header>
+
+<main>
+
+<!-- ============================================================ -->
+<section id="legend">
+  <h2>0 · 颜色与模块图例</h2>
+  <div class="legend">
+    <div class="item"><span class="swatch" style="background:var(--architect)"></span> architect（架构师）</div>
+    <div class="item"><span class="swatch" style="background:var(--backend)"></span> backend（后端）</div>
+    <div class="item"><span class="swatch" style="background:var(--frontend)"></span> frontend（前端）</div>
+    <div class="item"><span class="swatch" style="background:var(--tester)"></span> tester（测试）</div>
+    <div class="item"><span class="swatch" style="background:var(--pm)"></span> pm（产品经理）</div>
+    <div class="item" style="border-left:1px solid var(--line); padding-left:14px;">
+      <span class="swatch" style="background:var(--module-cli)"></span> cli
+    </div>
+    <div class="item"><span class="swatch" style="background:var(--module-agents)"></span> agents</div>
+    <div class="item"><span class="swatch" style="background:var(--module-graph)"></span> graph</div>
+    <div class="item"><span class="swatch" style="background:var(--module-db)"></span> database</div>
+    <div class="item"><span class="swatch" style="background:var(--module-config)"></span> config</div>
+    <div class="item"><span class="swatch" style="background:var(--module-utils)"></span> utils</div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="tree">
+  <h2>1 · 项目目录</h2>
+  <p class="desc">flat layout，<code>meetmind/</code> 与 <code>data/</code>、<code>chroma_data/</code>、<code>tests/</code> 同级。</p>
+  <div class="tree">
+<pre>
+MeetMind/
+├── <span class="file-cfg">pyproject.toml</span>       <span class="comment"># 依赖 + hatchling 打包 (uv)</span>
+├── <span class="file-cfg">.env</span>                  <span class="comment"># API_KEY / BASE_URL / MODEL_NAME</span>
+├── <span class="file-py">main.py</span>               <span class="comment"># ⬅ 根入口，调用 cli.main.main()</span>
+│
+├── <span class="dir">meetmind/</span>
+│   ├── <span class="dir">cli/</span>
+│   │   └── <span class="file-py">main.py</span>           <span class="comment"># 交互式 CLI 主循环</span>
+│   │
+│   ├── <span class="dir">agents/</span>
+│   │   ├── <span class="file-py">base.py</span>           <span class="comment"># BaseAgent + AgentResponse + _scrub_surrogates</span>
+│   │   ├── <span class="hl-architect">architect.py</span>      <span class="comment"># 架构师 — 整轮入口 & 终止者</span>
+│   │   ├── <span class="hl-backend">backend.py</span>        <span class="comment"># 后端</span>
+│   │   ├── <span class="hl-frontend">frontend.py</span>       <span class="comment"># 前端</span>
+│   │   ├── <span class="hl-tester">tester.py</span>         <span class="comment"># 测试</span>
+│   │   └── <span class="hl-pm">pm.py</span>             <span class="comment"># 产品经理</span>
+│   │
+│   ├── <span class="dir">graph/</span>
+│   │   ├── <span class="file-py">state.py</span>          <span class="comment"># AgentState (TypedDict) + MessageTurn</span>
+│   │   ├── <span class="file-py">routing.py</span>        <span class="comment"># route_next — 条件边路由</span>
+│   │   └── <span class="file-py">builder.py</span>        <span class="comment"># build_agent_graph — 编译 StateGraph</span>
+│   │
+│   ├── <span class="dir">database/</span>
+│   │   ├── <span class="file-py">client.py</span>         <span class="comment"># PersistentClient + collection</span>
+│   │   ├── <span class="file-py">constants.py</span>      <span class="comment"># collection_name_for</span>
+│   │   ├── <span class="file-py">loaders.py</span>        <span class="comment"># JSON/PDF/Word/MD/TXT 五种 loader</span>
+│   │   ├── <span class="file-py">initializer.py</span>    <span class="comment"># initialize_all_agents + reset_agent_db</span>
+│   │   └── <span class="file-py">rag_retriever.py</span>  <span class="comment"># RAGRetriever + as_langchain_tool</span>
+│   │
+│   ├── <span class="dir">config/</span>
+│   │   ├── <span class="file-py">settings.py</span>       <span class="comment"># Settings (pydantic-settings) + get_settings</span>
+│   │   └── <span class="file-py">constants.py</span>      <span class="comment"># AGENT_NAMES, ROLE_DESCRIPTIONS, NEXT_AGENT_PATTERN</span>
+│   │
+│   └── <span class="dir">utils/</span>
+│       ├── <span class="file-py">logger.py</span>         <span class="comment"># setup_logging / get_logger</span>
+│       └── <span class="file-py">formatting.py</span>     <span class="comment"># format_output_agentInfo / print_system / ...</span>
+│
+├── <span class="dir">data/</span>
+│   └── <span class="dir">seed/</span>&lt;agent&gt;/<span class="file-json">*.json|*.pdf|*.docx|*.md|*.txt</span>
+└── <span class="dir">chroma_data/</span>&lt;agent&gt;/  <span class="comment"># 本地 SQLite + ONNX 向量索引</span>
+</pre>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="entry-flow">
+  <h2>2 · 启动调用链（main → 主循环 → 单轮讨论）</h2>
+  <p class="desc">从根 <code>main.py</code> 一路展开到 LLM 的 tool_calls 循环。颜色代表所属模块。</p>
+  <div class="diagram">
+<pre class="mermaid">
+flowchart TD
+    a0["python main.py 入口"]
+    b0["main.py · main"]
+    c0["cli/main.py · main"]
+    d1["_print_banner"]
+    d2["_bootstrap<br/>校验 .env 并灌种子"]
+    d3["build_agent_graph<br/>编译 LangGraph"]
+    d4["while True 主循环<br/>读取需求 / 跑一轮 / 复盘"]
+    e1["utils/logger · setup_logging"]
+    e2["config/settings · get_settings"]
+    e3["database/initializer<br/>initialize_all_agents"]
+    f1["_seed_agent agent_name<br/>返回新增数 int"]
+    g1["_load_agent_seeds<br/>扫描 data/seed/AGENT/"]
+    g2["get_agent_collection<br/>返回 chroma Collection"]
+    h1["loaders.load_file<br/>按后缀分发"]
+    h2["load_json / load_markdown<br/>load_pdf / load_docx / load_text"]
+    i1["_build_all_agents<br/>5 个 Agent 实例"]
+    i2["StateGraph AgentState<br/>add_node x5<br/>add_conditional_edges route_next<br/>compile"]
+    j1["_run_one_discussion<br/>参数 graph, requirement"]
+    j2["graph.stream state<br/>stream_mode=values"]
+    k1["_make_node_fn._node state"]
+    k2["agent.process<br/>参数 requirement, history"]
+    l1["_scrub_surrogates text"]
+    l2["RAGRetriever.reset_tracking"]
+    l3["RAGRetriever.as_langchain_tool<br/>返回 Tool"]
+    l4["llm.bind_tools tools"]
+    l5["tool_calls 循环<br/>最多 _MAX_TOOL_ITERATIONS=5"]
+    m1["ChatOpenAI.invoke messages<br/>返回 AIMessage"]
+    m2["tool.invoke args"]
+    m3["retrieve_as_context query<br/>Chroma.query"]
+    m4["追加 ToolMessage<br/>content 与 tool_call_id"]
+    n1["_parse_routing text<br/>返回 next_agent, done"]
+    o1["format_output_agentInfo<br/>rich 面板输出"]
+    p1["routing.route_next state"]
+    endn["END 节点"]
+    q1["_architect_review state<br/>返回 bool"]
+    exitn["退出"]
+
+    a0 --> b0
+    b0 --> c0
+    c0 --> d1
+    c0 --> d2
+    c0 --> d3
+    c0 --> d4
+    d2 --> e1
+    d2 --> e2
+    d2 --> e3
+    e3 --> f1
+    f1 --> g1
+    f1 --> g2
+    g1 --> h1
+    h1 --> h2
+    d3 --> i1
+    d3 --> i2
+    d4 --> j1
+    j1 --> j2
+    j2 --> k1
+    k1 --> k2
+    k2 --> l1
+    k2 --> l2
+    k2 --> l3
+    k2 --> l4
+    k2 --> l5
+    l5 -->|每轮| m1
+    m1 -->|含 tool_calls| m2
+    m2 --> m3
+    m2 --> m4
+    m4 --> l5
+    m1 -->|无 tool_calls| n1
+    k1 --> o1
+    j2 --> p1
+    p1 -->|next_agent| k1
+    p1 -->|complete 或 iter 上限| endn
+    j1 --> q1
+    q1 -->|c 继续| d4
+    q1 -->|q 退出| exitn
+
+    classDef entry  fill:#0b1220,stroke:#38bdf8,color:#e6edf7,stroke-width:2px;
+    classDef cli    fill:#0e3a5b,stroke:#38bdf8,color:#e6edf7;
+    classDef agents fill:#2d1f5a,stroke:#a78bfa,color:#e6edf7;
+    classDef graph  fill:#0e3a2a,stroke:#34d399,color:#e6edf7;
+    classDef db     fill:#5b330e,stroke:#fb923c,color:#e6edf7;
+    classDef config fill:#4d1b3a,stroke:#f472b6,color:#e6edf7;
+    classDef utils  fill:#544610,stroke:#fde047,color:#1b1606;
+
+    class a0,endn,exitn entry;
+    class b0,c0,d1,d2,d4,j1,q1 cli;
+    class e1,o1 utils;
+    class e2 config;
+    class e3,f1,g1,g2,h1,h2,l2,l3,m2,m3 db;
+    class d3,i2,j2,k1,p1 graph;
+    class i1,k2,l1,l4,l5,m1,m4,n1 agents;
+</pre>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="state-machine">
+  <h2>3 · LangGraph 状态机（自由路由）</h2>
+  <p class="desc">入口固定为架构师；其他角色发言后写 <code>[NEXT_AGENT: …]</code> 决定下一个发言人，
+    架构师可输出 <code>[DONE]</code> 终止整轮讨论。</p>
+  <div class="diagram">
+<pre class="mermaid">
+flowchart LR
+    s0["START"]
+    ar["architect_node<br/>架构师"]
+    be["backend_node<br/>后端"]
+    fe["frontend_node<br/>前端"]
+    te["tester_node<br/>测试"]
+    pmn["pm_node<br/>产品经理"]
+    en["END 节点"]
+
+    s0 --> ar
+    ar -->|NEXT_AGENT backend| be
+    ar -->|NEXT_AGENT frontend| fe
+    ar -->|NEXT_AGENT tester| te
+    ar -->|NEXT_AGENT pm| pmn
+    ar -->|DONE 标记| en
+
+    be -->|NEXT_AGENT architect| ar
+    fe -->|NEXT_AGENT architect| ar
+    te -->|NEXT_AGENT architect| ar
+    pmn -->|NEXT_AGENT architect| ar
+
+    be -.->|iter 达到 max_iterations| en
+    fe -.->|iter 达到 max_iterations| en
+    te -.->|iter 达到 max_iterations| en
+    pmn -.->|iter 达到 max_iterations| en
+
+    classDef edge fill:#0b1220,stroke:#38bdf8,color:#e6edf7,stroke-width:2px;
+    classDef ar fill:#3a1f5a,stroke:#c084fc,color:#e6edf7,stroke-width:2px;
+    classDef be fill:#103b2a,stroke:#4ade80,color:#e6edf7,stroke-width:2px;
+    classDef fe fill:#0e3946,stroke:#22d3ee,color:#e6edf7,stroke-width:2px;
+    classDef te fill:#4a3a0a,stroke:#fbbf24,color:#e6edf7,stroke-width:2px;
+    classDef pmcls fill:#142d5e,stroke:#60a5fa,color:#e6edf7,stroke-width:2px;
+
+    class s0,en edge;
+    class ar ar;
+    class be be;
+    class fe fe;
+    class te te;
+    class pmn pmcls;
+</pre>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="tool-loop">
+  <h2>4 · BaseAgent.process —— tool_calls 循环细节</h2>
+  <p class="desc">不再预先注入 RAG，而是把 <code>rag_search_&lt;agent&gt;</code> 工具绑定到 LLM，
+  由模型自主决定调几次。</p>
+  <div class="diagram">
+<pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant Node as graph._node
+    participant Agent as BaseAgent.process
+    participant Scrub as _scrub_surrogates
+    participant Rag as RAGRetriever
+    participant LLM as ChatOpenAI bind_tools
+    participant Tool as rag_search_AGENT
+    participant Chroma as chromadb.Collection
+
+    Node->>Agent: process requirement, history
+    Agent->>Scrub: 清理输入中的 surrogate 字符
+    Agent->>Rag: reset_tracking
+    Agent->>Rag: as_langchain_tool 返回 Tool
+    Agent->>LLM: bind_tools tools
+    loop 最多 _MAX_TOOL_ITERATIONS=5 轮
+        Agent->>LLM: invoke messages
+        LLM-->>Agent: AIMessage 可能含 tool_calls
+        alt 有 tool_calls
+            Agent->>Tool: invoke query
+            Tool->>Chroma: query query_texts 取 top_k=3
+            Chroma-->>Tool: docs / metadatas / distances
+            Tool-->>Agent: 格式化上下文文本
+            Agent->>Agent: 追加 ToolMessage content+tool_call_id
+        else 无 tool_calls
+            Agent->>Agent: final_text 取 ai_msg.content
+            Note over Agent: 跳出循环
+        end
+    end
+    Agent->>Agent: _parse_routing 返回 next_agent, done
+    Agent-->>Node: AgentResponse message, output_role, done, used_rag, rag_sources
+</pre>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="modules-detail">
+  <h2>5 · 模块详情（关键文件 / 函数 / 参数）</h2>
+  <p class="desc">每个卡片对应一个 <code>.py</code> 文件，列出关键函数签名与一句话用途。</p>
+
+  <div class="modules">
+
+    <!-- ====== root entry ====== -->
+    <div class="mcard mod-cli">
+      <header>
+        <span class="dot"></span>
+        <span class="path">main.py <span class="cmt">（项目根入口）</span></span>
+        <span class="tag">cli · entry</span>
+      </header>
+      <div class="body">
+        <p class="note">最薄的入口文件。只把 <code>cli.main:main()</code> 导进来并调用。</p>
+        <ul>
+          <li><span class="fn">main</span>(<span class="args"></span>) → <span class="ret">None</span></li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- ====== cli/main.py ====== -->
+    <div class="mcard mod-cli">
+      <header>
+        <span class="dot"></span>
+        <span class="path">meetmind/cli/main.py</span>
+        <span class="tag">cli</span>
+      </header>
+      <div class="body">
+        <p class="note">交互式 CLI：banner → bootstrap → build graph → loop(读需求 / 跑讨论 / 复盘)。</p>
+        <ul>
+          <li><span class="fn">main</span>() → <span class="ret">None</span>  <span class="cmt"># 主循环</span></li>
+          <li><span class="fn">_print_banner</span>() → <span class="ret">None</span></li>
+          <li><span class="fn">_bootstrap</span>() → <span class="ret">None</span>  <span class="cmt"># 校验 .env + 灌种子</span></li>
+          <li><span class="fn">_run_one_discussion</span>(<span class="args">graph, requirement: str</span>) → <span class="ret">AgentState</span></li>
+          <li><span class="fn">_architect_review</span>(<span class="args">state: AgentState</span>) → <span class="ret">bool</span> <span class="cmt"># True=继续</span></li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- ====== agents/base.py ====== -->
+    <div class="mcard mod-agents">
+      <header>
+        <span class="dot"></span>
+        <span class="path">meetmind/agents/base.py</span>
+        <span class="tag">agents · core</span>
+      </header>
+      <div class="body">
+        <p class="note">公共能力：绑定 LLM、tool_calls 循环、路由解析、UTF-8 清理。</p>
+        <ul>
+          <li><span class="kw">class</span> <span class="fn">AgentResponse</span>(<span class="args">agent_name, role, message, output_role, done, used_rag, rag_sources</span>)</li>
+          <li><span class="kw">class</span> <span class="fn">BaseAgent</span>(<span class="args">name: str, role: str</span>)</li>
+          <li>　・<span class="fn">process</span>(<span class="args">requirement: str, conversation_history: str</span>) → <span class="ret">AgentResponse</span></li>
+          <li>　・<span class="fn">system_prompt</span> <span class="cmt"># @abstractmethod property</span></li>
+          <li>　・<span class="fn">_build_user_prompt</span>(<span class="args">requirement, history</span>) → <span class="ret">str</span></li>
+          <li>　・<span class="fn">_routing_instructions</span>() → <span class="ret">str</span></li>
+          <li>　・<span class="fn">_parse_routing</span>(<span class="args">text: str</span>) → <span class="ret">tuple[str|None, bool]</span></li>
+          <li><span class="fn">_scrub_surrogates</span>(<span class="args">text: str</span>) → <span class="ret">str</span> <span class="cmt"># 防 httpx 编码崩</span></li>
+          <li><span class="kw">const</span> _MAX_TOOL_ITERATIONS = <span class="ret">5</span></li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- ====== 5 Agent 子类 ====== -->
+    <div class="mcard mod-agents">
+      <header>
+        <span class="dot"></span>
+        <span class="path">meetmind/agents/{architect,backend,frontend,tester,pm}.py</span>
+        <span class="tag">agents · 5 roles</span>
+      </header>
+      <div class="body">
+        <p class="note">每个角色 = BaseAgent 子类 + 一段专属 system_prompt。</p>
+        <ul>
+          <li><span style="color:var(--architect)">ArchitectAgent</span>() <span class="cmt"># 拆需求、分派、汇总，可输出 [DONE]</span></li>
+          <li><span style="color:var(--backend)">BackendAgent</span>() <span class="cmt"># 接口/数据模型/性能/安全</span></li>
+          <li><span style="color:var(--frontend)">FrontendAgent</span>() <span class="cmt"># 页面结构/交互/接口契约</span></li>
+          <li><span style="color:var(--tester)">TesterAgent</span>() <span class="cmt"># 测试策略/用例/覆盖率</span></li>
+          <li><span style="color:var(--pm)">PMAgent</span>() <span class="cmt"># 用户故事/优先级/验收</span></li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- ====== graph/state.py ====== -->
+    <div class="mcard mod-graph">
+      <header>
+        <span class="dot"></span>
+        <span class="path">meetmind/graph/state.py</span>
+        <span class="tag">graph · state</span>
+      </header>
+      <div class="body">
+        <p class="note">LangGraph 全局共享状态的 TypedDict 声明。</p>
+        <ul>
+          <li><span class="kw">class</span> <span class="fn">MessageTurn</span>(<span class="args">agent_name, role, message, output_role</span>)</li>
+          <li><span class="kw">class</span> <span class="fn">AgentState</span>(<span class="args">requirement, messages[+], next_agent, complete, iteration</span>)</li>
+          <li><span class="cmt"># messages 使用 operator.add 作为 reducer，追加合并</span></li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- ====== graph/routing.py ====== -->
+    <div class="mcard mod-graph">
+      <header>
+        <span class="dot"></span>
+        <span class="path">meetmind/graph/routing.py</span>
+        <span class="tag">graph · routing</span>
+      </header>
+      <div class="body">
+        <p class="note">所有节点共用的条件边路由函数；按优先级 4 条规则决定下一节点。</p>
+        <ul>
+          <li><span class="fn">route_next</span>(<span class="args">state: AgentState</span>) → <span class="ret">str</span></li>
+          <li><span class="cmt">① iteration ≥ max_iterations → END</span></li>
+          <li><span class="cmt">② state.complete == True → END</span></li>
+          <li><span class="cmt">③ next_agent ∈ AGENT_NAMES → "&lt;agent&gt;_node"</span></li>
+          <li><span class="cmt">④ 兜底 → "architect_node"</span></li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- ====== graph/builder.py ====== -->
+    <div class="mcard mod-graph">
+      <header>
+        <span class="dot"></span>
+        <span class="path">meetmind/graph/builder.py</span>
+        <span class="tag">graph · builder</span>
+      </header>
+      <div class="body">
+        <p class="note">把 Agent 实例包装成 LangGraph node，组装出最终的 StateGraph。</p>
+        <ul>
+          <li><span class="fn">build_agent_graph</span>() → <span class="ret">CompiledStateGraph</span></li>
+          <li><span class="fn">_build_all_agents</span>() → <span class="ret">dict[str, BaseAgent]</span></li>
+          <li><span class="fn">_format_history</span>(<span class="args">messages: list[MessageTurn]</span>) → <span class="ret">str</span></li>
+          <li><span class="fn">_make_node_fn</span>(<span class="args">agent: BaseAgent</span>) → <span class="ret">Callable[[AgentState], dict]</span></li>
+          <li>　└─ <span class="fn">_node</span>(<span class="args">state: AgentState</span>) → <span class="ret">dict</span></li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- ====== database/client.py ====== -->
+    <div class="mcard mod-db">
+      <header>
+        <span class="dot"></span>
+        <span class="path">meetmind/database/client.py</span>
+        <span class="tag">database · chroma</span>
+      </header>
+      <div class="body">
+        <p class="note">每个 agent 独立的 Chroma PersistentClient（嵌入式 SQLite，不依赖 Docker）。</p>
+        <ul>
+          <li><span class="fn">_agent_db_dir</span>(<span class="args">agent_name: str</span>) → <span class="ret">Path</span></li>
+          <li><span class="fn">get_agent_client</span>(<span class="args">agent_name: str</span>) → <span class="ret">ClientAPI</span> <span class="cmt"># @lru_cache</span></li>
+          <li><span class="fn">get_agent_collection</span>(<span class="args">agent_name: str</span>) → <span class="ret">Collection</span></li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- ====== database/loaders.py ====== -->
+    <div class="mcard mod-db">
+      <header>
+        <span class="dot"></span>
+        <span class="path">meetmind/database/loaders.py</span>
+        <span class="tag">database · loaders</span>
+      </header>
+      <div class="body">
+        <p class="note">五种文件格式各一个 loader；<code>load_file</code> 根据后缀分发。</p>
+        <ul>
+          <li><span class="fn">load_json</span>(<span class="args">path: Path</span>) → <span class="ret">list[dict]</span></li>
+          <li><span class="fn">load_markdown</span>(<span class="args">path: Path</span>) → <span class="ret">list[dict]</span> <span class="cmt"># 按 ## 切块</span></li>
+          <li><span class="fn">load_pdf</span>(<span class="args">path: Path</span>) → <span class="ret">list[dict]</span> <span class="cmt"># 每页一条</span></li>
+          <li><span class="fn">load_docx</span>(<span class="args">path: Path</span>) → <span class="ret">list[dict]</span> <span class="cmt"># 每段一条</span></li>
+          <li><span class="fn">load_text</span>(<span class="args">path: Path</span>) → <span class="ret">list[dict]</span> <span class="cmt"># 按空行</span></li>
+          <li><span class="fn">load_file</span>(<span class="args">path: Path</span>) → <span class="ret">list[dict]</span> <span class="cmt"># 顶层分发</span></li>
+          <li><span class="kw">const</span> LOADERS: dict[suffix, loader_fn]</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- ====== database/initializer.py ====== -->
+    <div class="mcard mod-db">
+      <header>
+        <span class="dot"></span>
+        <span class="path">meetmind/database/initializer.py</span>
+        <span class="tag">database · seeding</span>
+      </header>
+      <div class="body">
+        <p class="note">扫描 <code>data/seed/&lt;agent&gt;/</code> 下所有文件，灌入对应 Chroma collection。
+          基于内容 md5 生成 doc_id，幂等。</p>
+        <ul>
+          <li><span class="fn">initialize_all_agents</span>() → <span class="ret">dict[str, int]</span></li>
+          <li><span class="fn">reset_agent_db</span>(<span class="args">agent_name: str</span>) → <span class="ret">None</span></li>
+          <li><span class="fn">_seed_agent</span>(<span class="args">agent_name: str</span>) → <span class="ret">int</span></li>
+          <li><span class="fn">_load_agent_seeds</span>(<span class="args">agent_name: str</span>) → <span class="ret">list[dict]</span></li>
+          <li><span class="fn">_doc_id</span>(<span class="args">agent_name, content</span>) → <span class="ret">str</span> <span class="cmt"># md5 前 12 位</span></li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- ====== database/rag_retriever.py ====== -->
+    <div class="mcard mod-db">
+      <header>
+        <span class="dot"></span>
+        <span class="path">meetmind/database/rag_retriever.py</span>
+        <span class="tag">database · RAG tool</span>
+      </header>
+      <div class="body">
+        <p class="note">绑定到单个 agent collection 的检索器；可暴露为 LangChain Tool 让 LLM 自主调用。</p>
+        <ul>
+          <li><span class="kw">class</span> <span class="fn">RetrievedDoc</span>(<span class="args">content, metadata, relevance</span>)</li>
+          <li><span class="kw">class</span> <span class="fn">RAGRetriever</span>(<span class="args">agent_name: str</span>)</li>
+          <li>　・<span class="fn">retrieve</span>(<span class="args">query: str, top_k: int|None=None</span>) → <span class="ret">list[RetrievedDoc]</span></li>
+          <li>　・<span class="fn">retrieve_as_context</span>(<span class="args">query, top_k</span>) → <span class="ret">str</span></li>
+          <li>　・<span class="fn">add_documents</span>(<span class="args">docs: list[dict]</span>) → <span class="ret">int</span></li>
+          <li>　・<span class="fn">as_langchain_tool</span>() → <span class="ret">Tool</span> <span class="cmt"># 暴露给 LLM</span></li>
+          <li>　・<span class="fn">reset_tracking</span>() → <span class="ret">None</span> <span class="cmt"># 每轮清零</span></li>
+          <li>　・<span class="kw">attr</span> call_count: int  ·  last_query_sources: list[str]</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- ====== config/settings.py ====== -->
+    <div class="mcard mod-config">
+      <header>
+        <span class="dot"></span>
+        <span class="path">meetmind/config/settings.py</span>
+        <span class="tag">config</span>
+      </header>
+      <div class="body">
+        <p class="note">pydantic-settings 单例；自动把 .env 里的相对路径锚定到 PROJECT_ROOT。</p>
+        <ul>
+          <li><span class="kw">class</span> <span class="fn">Settings</span>(<span class="args">api_key, base_url, model_name, max_tokens, temperature, chroma_base_path, seed_data_path, log_level, max_iterations, rag_top_k</span>)</li>
+          <li><span class="fn">get_settings</span>() → <span class="ret">Settings</span> <span class="cmt"># @lru_cache(1)</span></li>
+          <li><span class="fn">_resolve_relative_to_project_root</span>(<span class="args">v: Path</span>) → <span class="ret">Path</span> <span class="cmt"># field_validator</span></li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- ====== config/constants.py ====== -->
+    <div class="mcard mod-config">
+      <header>
+        <span class="dot"></span>
+        <span class="path">meetmind/config/constants.py</span>
+        <span class="tag">config · const</span>
+      </header>
+      <div class="body">
+        <p class="note">全局常量。Agent 名字、角色描述、路由正则。</p>
+        <ul>
+          <li>ARCHITECT / BACKEND / FRONTEND / TESTER / PM</li>
+          <li>AGENT_NAMES = [<span class="ret">"architect", "backend", "frontend", "tester", "pm"</span>]</li>
+          <li>ROLE_DESCRIPTIONS: dict[str, str]</li>
+          <li>NEXT_AGENT_PATTERN = <span class="ret">r"\[NEXT_AGENT:\s*([a-zA-Z_]+)\]"</span></li>
+          <li>DONE_MARKER = <span class="ret">"[DONE]"</span></li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- ====== utils/logger.py ====== -->
+    <div class="mcard mod-utils">
+      <header>
+        <span class="dot"></span>
+        <span class="path">meetmind/utils/logger.py</span>
+        <span class="tag">utils · logging</span>
+      </header>
+      <div class="body">
+        <p class="note">RichHandler 集中配置；幂等，多次调用安全。</p>
+        <ul>
+          <li><span class="fn">setup_logging</span>() → <span class="ret">None</span></li>
+          <li><span class="fn">get_logger</span>(<span class="args">name: str</span>) → <span class="ret">logging.Logger</span></li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- ====== utils/formatting.py ====== -->
+    <div class="mcard mod-utils">
+      <header>
+        <span class="dot"></span>
+        <span class="path">meetmind/utils/formatting.py</span>
+        <span class="tag">utils · pretty print</span>
+      </header>
+      <div class="body">
+        <p class="note">CLI 美化输出工具，统一基于 rich。</p>
+        <ul>
+          <li><span class="fn">get_console</span>() → <span class="ret">Console</span></li>
+          <li><span class="fn">format_separator</span>(<span class="args">title="", char="=", width=70</span>) → <span class="ret">str</span></li>
+          <li><span class="fn">format_output_agentInfo</span>(<span class="args">agent_name, message, next_role, used_rag, rag_sources</span>) → <span class="ret">None</span></li>
+          <li><span class="fn">print_system</span>(<span class="args">message: str</span>) → <span class="ret">None</span></li>
+        </ul>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="state-table">
+  <h2>6 · AgentState 字段表（图共享状态）</h2>
+  <p class="desc">每个图节点 <code>return</code> 的 dict 按字段合并进 <code>AgentState</code>；
+    <code>messages</code> 用 <code>operator.add</code> reducer 追加，其他字段直接覆盖。</p>
+  <table class="state-tbl">
+    <thead>
+      <tr>
+        <th>字段</th>
+        <th>类型</th>
+        <th>合并语义</th>
+        <th>含义</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="mono">requirement</td>
+        <td class="mono">str</td>
+        <td>覆盖</td>
+        <td>架构师本轮输入的原始需求；整轮不变</td>
+      </tr>
+      <tr>
+        <td class="mono">messages</td>
+        <td class="mono">list[MessageTurn]</td>
+        <td>追加 (operator.add)</td>
+        <td>仅追加的讨论历史，每个节点 append 一条</td>
+      </tr>
+      <tr>
+        <td class="mono">next_agent</td>
+        <td class="mono">str | None</td>
+        <td>覆盖</td>
+        <td>下一个发言 agent 的名字（由 _parse_routing 写入）</td>
+      </tr>
+      <tr>
+        <td class="mono">complete</td>
+        <td class="mono">bool</td>
+        <td>覆盖</td>
+        <td>架构师宣布完成（输出 [DONE]）后置 True，触发 END</td>
+      </tr>
+      <tr>
+        <td class="mono">iteration</td>
+        <td class="mono">int</td>
+        <td>覆盖</td>
+        <td>当前轮次；≥ max_iterations 时强制结束（防死循环）</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+</main>
+
+<footer class="foot">
+  生成自 <code>/Users/chenlv/Project/MeetMind</code> · LangChain + LangGraph + Chroma · 2026
+</footer>
+
+<!-- 锁定到 10.6.1 — 10.9.x 在 inline class apply (id["text"]:::class) 上有解析 bug -->
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10.6.1/dist/mermaid.min.js"></script>
+<script>
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'dark',
+    securityLevel: 'loose',
+    flowchart: { curve: 'basis', useMaxWidth: true, htmlLabels: true },
+    themeVariables: {
+      fontFamily: '-apple-system, "Segoe UI", "PingFang SC", sans-serif',
+      fontSize: '14px',
+      background: '#16213a',
+      primaryColor: '#1d2a47',
+      primaryTextColor: '#e6edf7',
+      primaryBorderColor: '#28365a',
+      lineColor: '#8aa0c4',
+      tertiaryColor: '#0b1220'
+    }
+  });
+</script>
+
+</body>
+</html>

@@ -7,6 +7,8 @@ from meetmind.config.constants import TESTER
 
 
 class TesterAgent(BaseAgent):
+    """测试工程师 Agent：给出测试策略、用例设计、覆盖率与风险评估。"""
+
     def __init__(self) -> None:
         super().__init__(name=TESTER, role="测试工程师")
 

@@ -7,6 +7,8 @@ from meetmind.config.constants import FRONTEND
 
 
 class FrontendAgent(BaseAgent):
+    """前端工程师 Agent：负责页面结构、交互流程、UI/UX 评估和接口对接细节。"""
+
     def __init__(self) -> None:
         super().__init__(name=FRONTEND, role="前端工程师")
 

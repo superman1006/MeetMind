@@ -1,4 +1,9 @@
-"""LangGraph 状态的 TypedDict 定义。"""
+"""LangGraph 共享状态的 TypedDict 定义。
+
+`AgentState` 是整个图运行时被所有节点共享的"全局变量"；每个节点函数返回
+的字典会按字段被合并进来——其中 `messages` 使用 `operator.add` 作为
+reducer 实现追加合并，其他字段则是直接覆盖。
+"""
 
 from __future__ import annotations
 
@@ -7,24 +12,28 @@ from typing import Annotated, TypedDict
 
 
 class MessageTurn(TypedDict):
+    """一次 agent 发言的不可变快照，会被追加进 `AgentState.messages`。"""
+
     agent_name: str
     role: str
     message: str
-    output_role: str | None  # 下一响应该由哪个 agent 负责，完成时为 None
+    output_role: str | None  # 该 agent 指定的下一发言人；None 表示已结束
 
 
 class AgentState(TypedDict, total=False):
-    # 架构师输入,同一个会话中不变
+    """整张图共享的状态。所有字段对所有节点都可读，写则按 reducer 合并。"""
+
+    # 架构师本轮输入的原始需求；整轮讨论中保持不变
     requirement: str
 
-    # 仅追加的讨论记录
+    # 仅追加的讨论历史：每个节点 return `{"messages": [new_turn]}` 会被拼到尾部
     messages: Annotated[list[MessageTurn], add]
 
-    # 路由：下一待调用的 agent（由上一节点设置）
+    # 下一待调用 agent 的名字，由上一节点解析自己的 `[NEXT_AGENT: …]` 标记后写入
     next_agent: str | None
 
-    # 完成信号 — 工作完成时由架构师设置
+    # 完成信号；架构师输出 `[DONE]` 时被置 True，触发条件边走向 END
     complete: bool
 
-    # 安全：图迭代次数上限
+    # 已执行的节点轮次数；用于和 Settings.max_iterations 比较，防死循环
     iteration: int

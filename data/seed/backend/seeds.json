@@ -1,0 +1,32 @@
+[
+  {
+    "content": "现有后端项目结构：app/api（路由）、app/services（业务逻辑）、app/models（SQLAlchemy ORM）、app/schemas（Pydantic）、app/db（数据库会话）。统一在 app/core/config.py 管理配置。",
+    "type": "code",
+    "date": "2026-05-01"
+  },
+  {
+    "content": "认证实现：FastAPI Depends + OAuth2PasswordBearer，签发 access_token (15 分钟) 和 refresh_token (7 天)。密码使用 bcrypt 哈希，盐值 12。",
+    "type": "code",
+    "date": "2026-05-09"
+  },
+  {
+    "content": "数据库连接池配置：SQLAlchemy create_async_engine(pool_size=10, max_overflow=20, pool_pre_ping=True)。使用 alembic 管理迁移。",
+    "type": "code",
+    "date": "2026-05-10"
+  },
+  {
+    "content": "工作日志 2026-05-19：完成了 /api/v1/projects CRUD 接口，单元测试覆盖率 87%。还差权限校验中间件需要补充。",
+    "type": "log",
+    "date": "2026-05-19"
+  },
+  {
+    "content": "性能优化经验：list 接口必须分页 + 索引；不要 N+1，使用 selectinload。Redis 缓存热点数据，TTL 默认 5 分钟。",
+    "type": "best_practice",
+    "date": "2026-04-25"
+  },
+  {
+    "content": "代码示例 - 通用响应封装：class APIResponse(BaseModel): code:int=0; message:str='ok'; data: Any|None=None。所有接口统一返回该结构。",
+    "type": "code",
+    "date": "2026-05-05"
+  }
+]

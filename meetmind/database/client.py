@@ -14,6 +14,10 @@ from meetmind.database.constants import collection_name_for
 
 
 def _agent_db_dir(agent_name: str) -> Path:
+    """返回该 agent 的 Chroma 持久化目录，不存在则自动创建。
+
+    路径形如 `<chroma_base_path>/<agent_name>/`，由 Settings 配置决定。
+    """
     base = get_settings().chroma_base_path
     path = base / agent_name
     path.mkdir(parents=True, exist_ok=True)

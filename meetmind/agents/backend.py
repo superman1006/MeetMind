@@ -7,6 +7,8 @@ from meetmind.config.constants import BACKEND
 
 
 class BackendAgent(BaseAgent):
+    """后端工程师 Agent：负责 API、数据模型、性能与安全相关的技术输入。"""
+
     def __init__(self) -> None:
         super().__init__(name=BACKEND, role="后端工程师")
 

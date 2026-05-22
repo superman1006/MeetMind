@@ -8,8 +8,9 @@ from datetime import datetime
 from rich.console import Console
 from rich.panel import Panel
 
-from meetmind.config.constants import ROLE_DESCRIPTIONS
+from meetmind.config.constants import AGENT_NAMES, ROLE_DESCRIPTIONS
 from meetmind.config.settings import get_settings
+from meetmind.database.client import get_agent_collection
 from meetmind.database.initializer import initialize_all_agents
 from meetmind.graph.builder import build_agent_graph
 from meetmind.graph.state import AgentState
@@ -49,29 +50,22 @@ def _print_banner() -> None:
 
 
 def _bootstrap() -> None:
-    """校验配置、初始化日志、播种数据库。"""
+    """bootstrap是引导,用来 导入配置、初始化日志、播种数据库。"""
     setup_logging()
     settings = get_settings()
+    print("="*40,"get_settings()拿到配置", "="*40)
+    for setting in settings:
+        print(f"配置项 {setting}")
+    print("="*100)
+    print()
 
-    missing = [
-        name
-        for name, value in [
-            ("API_KEY", settings.api_key),
-            ("BASE_URL", settings.base_url),
-            ("MODEL_NAME", settings.model_name),
-        ]
-        if not value
-    ]
-    if missing:
-        console.print(
-            f"[bold red]✗ 缺少环境变量: {', '.join(missing)}[/bold red]\n"
-            "请复制 .env.example 为 .env 并填入对应的 LLM 配置（API_KEY / BASE_URL / MODEL_NAME）。"
-        )
-        sys.exit(1)
 
+
+    # 判断是否第一次运行（即 Chroma 数据库目录不存在或为空），首次启动会下载 embedding 模型。
     is_first_run = not settings.chroma_base_path.exists() or not any(
         settings.chroma_base_path.iterdir()
     )
+    # print_system 是 console.print 的包装，带有统一的系统消息前缀和样式。
     print_system(f"RAG 存储位置: [cyan]{settings.chroma_base_path}[/cyan] (本地 SQLite)")
     if is_first_run:
         print_system(
@@ -79,16 +73,37 @@ def _bootstrap() -> None:
             "~/.cache/chroma/，首次约 1-2 分钟，之后启动只需几秒。[/yellow]"
         )
 
-    with console.status(
-        "[bold cyan]初始化 5 个 Agent 的知识库...", spinner="dots"
-    ):
+
+
+
+    # 在初始化之前先把每个 agent 的 seed 目录文件列出来，
+    # 让用户清楚看到自己放进去的 PDF / DOCX 等被扫描到了。
+    print_system("扫描各 Agent 的 seed 文件目录：")
+    for agent in AGENT_NAMES:
+        agent_dir = settings.seed_data_path / agent
+        if not agent_dir.exists():
+            print_system(f"   · [yellow]{agent}[/yellow]: (当前 agent 存放原始数据的目录不存在，将走旧 *_seeds.json 兜底)")
+            continue
+        files = sorted(p.name for p in agent_dir.iterdir() if p.is_file() and not p.name.startswith("."))
+        if not files:
+            print_system(f"   · [yellow]{agent}[/yellow]: 目录为空")
+        else:
+            print_system(f"   · [cyan]{agent}[/cyan]: {len(files)} 个文件 → {', '.join(files)}")
+    print()
+
+
+
+    # 初始化所有 agent 的知识库，并统计每个 agent 新增了多少文档。
+    with console.status("[bold cyan]初始化 5 个 Agent 的知识库...", spinner="dots"):
         added = initialize_all_agents()
 
-    for agent, n in added.items():
-        if n:
-            print_system(f"  ✓ {agent}: 新增 {n} 条种子文档")
-        else:
-            print_system(f"  ✓ {agent}: 已就绪")
+    # 灌入结果 + collection 当前总文档数；这样即使本次幂等没新增，
+    # 用户也能看到 PDF 这类文件之前到底有没有进库。
+    for agent in AGENT_NAMES:
+        total = len(get_agent_collection(agent).get().get("ids") or [])
+        new = added.get(agent, 0)
+        status = f"新增 [bold green]{new}[/bold green] 条，" if new else "[dim]无新增[/dim]，"
+        print_system(f"  ✓ [bold]{agent}[/bold]: {status}collection 现共 {total} 条文档")
 
 
 def _run_one_discussion(graph, requirement: str) -> AgentState:
@@ -148,6 +163,7 @@ def _architect_review(state: AgentState) -> bool:
 
 
 def main() -> None:
+    """CLI 主循环：架构师输入需求 → 图驱动 5 个 agent 讨论 → 架构师复盘 → 重复或退出。"""
     _print_banner()
     _bootstrap()
 

@@ -7,6 +7,8 @@ from meetmind.config.constants import ARCHITECT
 
 
 class ArchitectAgent(BaseAgent):
+    """架构师 Agent：本系统的入口和终止者，负责拆需求、分派、汇总并最终输出 `[DONE]`。"""
+
     def __init__(self) -> None:
         super().__init__(name=ARCHITECT, role="架构师（项目老大）")
 

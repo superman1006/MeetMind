@@ -7,6 +7,8 @@ from meetmind.config.constants import PM
 
 
 class PMAgent(BaseAgent):
+    """产品经理 Agent：澄清需求背景、拆解用户故事、定义验收标准与优先级。"""
+
     def __init__(self) -> None:
         super().__init__(name=PM, role="产品经理")
 

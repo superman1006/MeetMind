@@ -23,7 +23,7 @@ from meetmind.agents.tester import TesterAgent
 from meetmind.config.constants import AGENT_NAMES, ARCHITECT, BACKEND, FRONTEND, PM, TESTER
 from meetmind.graph.routing import route_next
 from meetmind.graph.state import AgentState, MessageTurn
-from meetmind.utils.formatting import format_output_agentInfo
+from meetmind.utils.formatting import print_agent_info
 from meetmind.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -50,7 +50,7 @@ def _format_history(messages: list[MessageTurn]) -> str:
     return "\n\n".join(chunks)
 
 
-def _make_node_fn(agent: BaseAgent) -> Callable[[AgentState], dict]:
+def _create_node(agent: BaseAgent) -> Callable[[AgentState], dict]:
     """一个工厂函数: 输入一个 Agent，输出一个"能被 LangGraph 调用的节点函数"""
 
     def _node(state: AgentState) -> dict:
@@ -65,10 +65,10 @@ def _make_node_fn(agent: BaseAgent) -> Callable[[AgentState], dict]:
             agent.name,
         )
 
-        response = agent.process(requirement=requirement, conversation_history=history)
+        response = agent.invoke(requirement=requirement, conversation_history=history)
 
         # 实时在控制台美化输出
-        format_output_agentInfo(
+        print_agent_info(
             agent_name=response.agent_name,
             message=response.message,
             next_role=response.output_role if not response.done else "DONE",
@@ -101,7 +101,7 @@ def build_agent_graph():
 
     # 1. 为每个 agent 添加节点
     for name, agent in agents.items():
-        graph.add_node(f"{name}_node", _make_node_fn(agent))
+        graph.add_node(f"{name}_node", _create_node(agent))
 
     # 2. 入口 — START --> ARCHITECT
     graph.add_edge(START, f"{ARCHITECT}_node")

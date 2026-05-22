@@ -5,7 +5,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -46,6 +46,19 @@ class Settings(BaseSettings):
     # 运行时限制
     max_iterations: int = Field(default=15, description="Safety cap on graph loops")
     rag_top_k: int = Field(default=3)
+
+    # ---- 路径校验：把 .env 里写的相对路径锚定到项目根，避免不同 cwd 下解析到错位 ----
+    @field_validator("chroma_base_path", "seed_data_path", mode="after")
+    @classmethod
+    def _resolve_relative_to_project_root(cls, v: Path) -> Path:
+        """把相对路径解析为相对 PROJECT_ROOT 的绝对路径。
+
+        例如 `.env` 里写 `CHROMA_BASE_PATH=./chroma_data`，无论从哪个 cwd
+        启动都会解析为 `<PROJECT_ROOT>/chroma_data`，而不是当前目录下的同名目录。
+        """
+        if not v.is_absolute():
+            return (PROJECT_ROOT / v).resolve()
+        return v
 
 
 
