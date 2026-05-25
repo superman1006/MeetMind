@@ -42,6 +42,9 @@ class Settings(BaseSettings):
 
     # ---------- Embedding (本地 sentence-transformers) ----------
     embedding_model_name: str = Field(default="sentence-transformers/all-MiniLM-L6-v2")
+    # 模型缓存目录：默认放项目内 ./models/，避免依赖用户家目录的 ~/.cache/huggingface/
+    # 这样首次下载也在项目内，换机/拷贝项目就能带走，不会要重下
+    embedding_cache_dir: Path = Field(default=PROJECT_ROOT / "models")
 
     # ---------- Cohere Rerank ----------
     cohere_api_key: str = Field(default="")
@@ -56,7 +59,7 @@ class Settings(BaseSettings):
     max_iterations: int = Field(default=15, description="LangGraph 单轮最大节点数")
 
     # ---- 路径校验：把 .env 里写的相对路径锚定到项目根 ----
-    @field_validator("seed_data_path", mode="after")
+    @field_validator("seed_data_path", "embedding_cache_dir", mode="after")
     @classmethod
     def _resolve_relative_to_project_root(cls, v: Path) -> Path:
         """把相对路径解析为相对 PROJECT_ROOT 的绝对路径。

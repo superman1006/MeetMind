@@ -76,7 +76,10 @@ def split_markdown(docs: list[dict]) -> list[dict]:
             # 第二层：按长度切
             pieces = length_splitter.split_text(hc.page_content)
             for piece in pieces:
-                meta = {**d, **{k: v for k, v in hc.metadata.items() if k != "content"}}
+                meta = dict(d)
+                for k, v in hc.metadata.items():
+                    if k != "content":
+                        meta[k] = v
                 meta["content"] = piece
                 out.append(meta)
     return out

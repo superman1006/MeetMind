@@ -33,24 +33,24 @@ docker compose down -v && docker compose up -d
 ### 调用链一句话
 
 ```
-main.py → cli.main.main() → [_print_banner / _bootstrap / build_agent_graph / while True]
+main.py → cli.main.main() → [_print_banner / _bootstrap / build_graph / while True]
                                               ↓
                             graph.stream() → _node(state) → agent.invoke() → tool_calls 循环
                                               ↓
-                                       route_next(state) → 下一个 _node 或 END
+                                       route_to_which_agent(state) → 下一个 _node 或 END
 ```
 
 ### 三层职责分离
 
 1. **`meetmind/agents/`** — 角色定义。`BaseAgent.invoke()` 是核心，做三件事：(1) 用 `clean_bad_chars` 清掉 stdin 来的 surrogate 码点；(2) 把 RAG 检索器作为 LangChain Tool 绑定到 LLM，跑最多 `_MAX_TOOL_ITERATIONS=5` 轮的 tool_calls 循环；(3) 调 `_get_next_node` 从 LLM 回复里解析 `[NEXT_AGENT: xxx]` 或 `[DONE]` 标记。
 
-2. **`meetmind/graph/`** — LangGraph 编排。`AgentState` 是共享状态（`messages` 用 `operator.add` reducer 追加、其他字段覆盖）；`route_next` 是所有节点共用的条件边函数，按 `iteration >= max_iterations` → `state["done"]` → `state["next_agent"] in AGENT_NAMES` → `architect_node` 兜底的顺序决定下一节点。
+2. **`meetmind/graph/`** — LangGraph 编排。`AgentState` 是共享状态（`messages` 用 `operator.add` reducer 追加、其他字段覆盖）；`route_to_which_agent` 是所有节点共用的条件边函数，按 `iteration >= max_iterations` → `state["done"]` → `state["next_agent"] in AGENT_NAMES` → `architect_node` 兜底的顺序决定下一节点。
 
 3. **`meetmind/database/`** — RAG，**全部走 ES + Cohere**。`client.py` 负责 ES 单例 + 每 agent 的 index（mapping 同时含 `content: text`、`embedding: dense_vector`、`metadata.*: keyword`）；`embedding.py` 用 sentence-transformers `all-MiniLM-L6-v2` 本地算 384 维向量；`initializer._populate_one_agent` 跑「load → split → embed → ES bulk index」灌库，用内容 md5 作为 `_id` 实现幂等；`rag_retriever.RAGRetriever.retrieve(query)` 是核心：**并行跑 BM25 检索 + kNN 向量检索 → 按 `_id` 去重合并 → 全部送 `reranker.rerank()` 调 Cohere `rerank-v4.0-pro` → 按 relevance_score 排序返回 top-K**。候选数和返回数分别由 `RETRIEVE_TOP_N=20` 和 `RERANK_TOP_N=5` 控制。
 
 ### 关键设计点
 
-- **路由协议是字符串约定**：Agent 在回复末尾写 `[NEXT_AGENT: name]` 或 `[DONE]`，`_get_next_node` 用正则解析。非架构师如果意外输出 `[DONE]` 也会被同等处理；解析失败时兜底回 architect，保证图永远不卡死。
+- **路由协议是字符串约定**：Agent 在回复末尾写 `[NEXT_AGENT: name]` 或 `[DONE]`，`_get_next_agent` 用正则解析。非架构师如果意外输出 `[DONE]` 也会被同等处理；解析失败时兜底回 architect，保证图永远不卡死。
 - **RAG 是 Tool 不是 prompt 注入**：旧版本在 prompt 里塞检索结果，现在改为 `bind_tools([rag_tool])` 让 LLM 自主决定是否调用。代价是模型必须支持 OpenAI function calling 协议。
 - **路径相对性**：`config/settings.py` 里有一个 `@field_validator` 把 `.env` 里 `SEED_DATA_PATH=./data/seed` 这类相对路径自动锚定到 `PROJECT_ROOT`。不要去掉这个 validator，否则从 IDE / 不同 cwd 启动会找不到种子目录。
 - **首次启动 ~80MB + ~1GB**：sentence-transformers 首次 `SentenceTransformer(...)` 调用会从 HuggingFace 下载 ~80MB 权重到 `~/.cache/huggingface/`；同时 `uv sync` 装的 torch 本身约 800MB。两个都是一次性。
@@ -66,9 +66,9 @@ main.py → cli.main.main() → [_print_banner / _bootstrap / build_agent_graph 
 | `BaseAgent` 实例上的 RAG 引用 | `self.RAGRetriever` | 不是 `self.rag_retriever`，刻意大驼峰 |
 | BaseAgent prompt 拼装 | `_user_prompt(requirement, history)` / `_routing_prompt()` | 不是 `_build_user_prompt` / `_routing_instructions`，已去掉冗余前缀 |
 | BaseAgent 主方法 | `invoke(requirement, conversation_history)` | 不是 `process()` |
-| 路由解析 | `_get_next_node(text)` | 不是 `_parse_routing()` |
+| 路由解析 | `_get_next_agent(text)` | 不是 `_parse_routing()` / `_get_next_node()` |
 | 字符清理 | `clean_bad_chars(text)` | 模块级函数；不是 `_scrub_surrogates()` |
-| RAG 工具 | `RAGRetriever.restart()` / `.to_tool()` | 不是 `reset_tracking()` / `as_langchain_tool()`；ES 版本已不需要 `mark_dirty()` |
+| RAG 工具 | `RAGRetriever.restart()` / `.get_tool()` | 不是 `reset_tracking()` / `as_langchain_tool()` / `.to_tool()`；ES 版本已不需要 `mark_dirty()` |
 | Initializer 私函数 | `_populate_one_agent` / `_get_seeds_content` / `_generate_doc_id` | 不是 `_seed_agent` / `_load_agent_seeds` / `_doc_id` |
 | Initializer 入口 | `build_agents_indices()` | 不是 `build_agents_collections()`（ES 时代叫 index 不叫 collection） |
 | ES 客户端 / index | `get_es_client()` / `ensure_agent_index(agent)` / `count_docs(agent)` | 不是 `get_agent_client` / `get_agent_collection` |
@@ -103,7 +103,7 @@ main.py → cli.main.main() → [_print_banner / _bootstrap / build_agent_graph 
 
 - `str.join()` 的直接用法（`"\n".join(lines)`），前提是 `lines` 已经是具名变量；
 - `logger.info(...)` 等日志调用内部的简单格式化；
-- 两层以内、语义一目了然的属性访问（`settings.chroma_base_path`）。
+- 两层以内、语义一目了然的属性访问（`settings.es_url`）。
 
 ## 项目入口
 

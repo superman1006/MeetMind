@@ -27,10 +27,8 @@ def route_to_which_agent(state: AgentState) -> str:
 
     # 当迭代次数达到上限后自动路由到 END 节点,以防止无限循环
     if iteration >= get_settings().max_iterations:
-        logger.warning(
-            "Reached max_iterations=%d, ending discussion as a safety stop.",
-            get_settings().max_iterations,
-        )
+        max_iter = get_settings().max_iterations
+        logger.warning(f"已达到迭代上限 max_iterations={max_iter}，强制结束讨论。")
         return END
 
     # 当迭代<max且任务已完成时,路由到 END 节点

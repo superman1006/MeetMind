@@ -29,6 +29,9 @@ wheels/
 # Chroma persistent data (will be regenerated from seeds)
 chroma_data/
 
+# Embedding 模型缓存（首次启动从 HuggingFace 自动下载，~87MB）
+models/
+
 # IDE
 .idea/
 .vscode/

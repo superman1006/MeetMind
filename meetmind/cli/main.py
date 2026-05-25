@@ -15,7 +15,8 @@ from dotenv import load_dotenv
 
 from rich.console import Console
 from rich.panel import Panel
-
+from rich.table import Table
+import json
 from meetmind.config.constants import AGENT_NAMES, ROLE_DESCRIPTIONS
 from meetmind.config.settings import get_settings
 from meetmind.database.client import count_docs, ping_es
@@ -183,10 +184,14 @@ def _next_round_or_not(state: AgentState) -> bool:
     n_turns = len(msgs) # agent 发言的次数
     done = state.get("done", False)
 
+    if done:
+        done_text = "[bold green]架构师已宣布完成 ✅[/bold green]"
+    else:
+        done_text = "[yellow]架构师未宣布完成[/yellow]"
+
     console.print(
         Panel(
-            f"本轮共 {n_turns} 次 agent 发言；"
-            + ("[bold green]架构师已宣布完成 ✅[/bold green]" if done else "[yellow]架构师未宣布完成[/yellow]"),
+            f"本轮共 {n_turns} 次 agent 发言；" + done_text,
             title="[bold]架构师复盘[/bold]",
             border_style="magenta",
         )
@@ -202,6 +207,56 @@ def _next_round_or_not(state: AgentState) -> bool:
         if choice in {"c", "q"}:
             return choice == "c"
         console.print("[red]请输入 c 或 q[/red]")
+
+
+def _print_final_state(state: AgentState | None) -> None:
+    """退出前打印最后一次讨论留下的 AgentState 快照。
+
+    这是 LangGraph 共享状态在本次会话结束时的最终模样：
+      - 顶部 Panel 展示元数据（requirement / iteration / done / next_agent / 消息条数）
+      - 下方 Table 把每条 MessageTurn 摘要列出来（agent → 路由目标 + 80 字预览）
+    若用户一次讨论都没跑就退出，state 为 None，打一行说明即可。
+    """
+    if state is None:
+        console.print(
+            "\n[dim](本次会话未进入任何讨论，无最终 AgentState 可展示。)[/dim]"
+        )
+        return
+
+    messages = state.get("messages") or []
+
+    console.print()
+
+    if not messages:
+        return
+
+    table = Table(
+        title="messages 历史",
+        show_header=True,
+        header_style="bold cyan",
+        border_style="cyan",
+    )
+    table.add_column("#", style="dim", width=3)
+    table.add_column("agent", style="bold")
+    table.add_column("→ next", style="dim")
+    table.add_column("message 预览 (80 字)", overflow="fold")
+
+    for i, m in enumerate(messages):
+        agent_name = m.get("agent_name", "")
+        # 兼容历史命名：MessageTurn 里可能是 next_agent 也可能是 output_role
+        next_role = m.get("next_agent")
+        raw_msg = m.get("message")
+        flat_msg = raw_msg.replace("\n", " ")
+        if len(flat_msg) > 80:
+            msg_preview = flat_msg[:80] + "..."
+        else:
+            msg_preview = flat_msg
+        table.add_row(str(i + 1), agent_name, next_role, msg_preview)
+
+    console.print(table)
+
+    # AgentState 最终结构
+    # print(json.dump(state,indent=4,fp=sys.stdout))
 
 
 def main() -> None:
@@ -221,6 +276,9 @@ def main() -> None:
         )
     )
 
+    # 跨多轮跟踪最近一次讨论的最终状态；用户 quit 时打印它。
+    last_state: AgentState | None = None
+
     while True:
         console.print()
         console.print("[bold magenta]架构师，请输入项目需求 (输入 'quit' 退出):[/bold magenta]")
@@ -228,18 +286,22 @@ def main() -> None:
             requirement = console.input("> ").strip()
         except (EOFError, KeyboardInterrupt):
             console.print("\n[bold]再见！[/bold]")
+            _print_final_state(last_state)
             return
 
         if not requirement:
             continue
         if requirement.lower() in {"quit", "exit", "q"}:
             console.print("\n[bold]再见！[/bold]")
+            _print_final_state(last_state)
             return
 
         final_state = _run_one_discussion(graph, requirement)
+        last_state = final_state
 
         if not _next_round_or_not(final_state):
             console.print("\n[bold]再见！[/bold]")
+            _print_final_state(last_state)
             return
 
 

@@ -2,7 +2,10 @@
 
 用 sentence-transformers 在本地加载模型（默认 `all-MiniLM-L6-v2`，384 维），
 和原先 chromadb 内置的 ONNX 模型同一份，保证迁移到 ES 后向量空间不变。
-模型只在第一次调用 `get_embedder()` 时加载并被 lru_cache 缓存。
+模型只在第一次调用 `get_embedder_model()` 时加载并被 lru_cache 缓存。
+
+**模型文件不在 ~/.cache/huggingface/，而在项目内 `./models/`**（由 settings.embedding_cache_dir 控制），
+首次启动会在那下载一次（~80MB），之后启动只从本地磁盘读。
 """
 
 from __future__ import annotations
@@ -23,14 +26,19 @@ logger = get_logger(__name__)
 def get_embedder_model() -> "SentenceTransformer":
     """加载 sentence-transformers 模型，单例缓存。
 
-    首次调用会从 HuggingFace 下载约 80MB 权重到 `~/.cache/huggingface/`；
-    之后启动是秒级。
+    首次调用会从 HuggingFace 下载约 80MB 权重到 `settings.embedding_cache_dir`
+    （默认项目内 `./models/`）；之后启动只是从该目录加载到内存。
     """
     # 延迟 import：sentence-transformers 拉 torch，import 本身就要 1-2 秒
     from sentence_transformers import SentenceTransformer
 
-    model_name = get_settings().embedding_model_name
-    model = SentenceTransformer(model_name)
+    settings = get_settings()
+    cache_dir = settings.embedding_cache_dir
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    model_name = settings.embedding_model_name
+    logger.info(f"[embedding] 加载 {model_name}（缓存目录: {cache_dir}）")
+    model = SentenceTransformer(model_name, cache_folder=str(cache_dir))
     logger.info(f"[embedding] 加载完成，维度 {model.get_embedding_dimension()}")
     return model
 
