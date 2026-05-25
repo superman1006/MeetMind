@@ -16,7 +16,7 @@ from meetmind.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-# ---------------------------------------------------------------- JSON
+# 加载 JSON
 def load_json(path: Path) -> list[dict]:
     """加载 JSON 文件。
 
@@ -25,9 +25,11 @@ def load_json(path: Path) -> list[dict]:
     """
     raw = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(raw, list):
-        logger.warning("JSON %s 顶层不是 list，已跳过", path)
+        logger.warning(f"JSON {path} 顶层不是 list，已跳过")
         return []
     docs: list[dict] = []
+
+    # 拿到 list 后逐条检查，丢弃不符合要求的条目（非 dict 或缺 content）
     for i, item in enumerate(raw):
         if not isinstance(item, dict) or "content" not in item:
             continue
@@ -37,7 +39,7 @@ def load_json(path: Path) -> list[dict]:
     return docs
 
 
-# ---------------------------------------------------------------- Markdown
+# 加载 Markdown
 def load_markdown(path: Path) -> list[dict]:
     """加载 Markdown 文件，按二级及以下标题或空行切块。
 
@@ -48,6 +50,7 @@ def load_markdown(path: Path) -> list[dict]:
     blocks: list[str] = []
     current: list[str] = []
     has_heading = False
+    # 按行遍历，遇到 `##` 标题就切块；否则继续累积到 current
     for line in text.splitlines():
         if line.startswith("## "):
             has_heading = True
@@ -61,31 +64,30 @@ def load_markdown(path: Path) -> list[dict]:
 
     # 没有任何 `##` 标题 → 退化为按空行分段
     if not has_heading:
-        blocks = [b.strip() for b in text.split("\n\n")]
+        blocks = []
+        for b in text.split("\n\n"):
+            blocks.append(b.strip())
 
-    return [
-        {"content": b, "type": "markdown", "source": path.name}
-        for b in blocks
-        if b.strip()
-    ]
+    result = []
+    for b in blocks:
+        if b.strip():
+            result.append({"content": b, "type": "markdown", "source": path.name})
+    return result
 
 
-# ---------------------------------------------------------------- PDF
+# 加载 PDF
 def load_pdf(path: Path) -> list[dict]:
     """加载 PDF 文件，每页作为一条 RAG 文档。
 
     使用 `pypdf` 提取文本。扫描版 PDF（图像）将得到空字符串并被丢弃。
     """
-    try:
-        from pypdf import PdfReader
-    except ImportError as exc:
-        logger.error("加载 PDF 需要 pypdf：%s", exc)
-        return []
+    from pypdf import PdfReader
 
     reader = PdfReader(str(path))
     docs: list[dict] = []
+    # 把每页作为一个 doc，丢弃空页
     for i, page in enumerate(reader.pages, start=1):
-        text = (page.extract_text() or "").strip()
+        text = page.extract_text().strip()
         if not text:
             continue
         docs.append(
@@ -98,20 +100,18 @@ def load_pdf(path: Path) -> list[dict]:
     return docs
 
 
-# ---------------------------------------------------------------- Word
+# 加载 Word
 def load_docx(path: Path) -> list[dict]:
     """加载 Word (.docx) 文件，按段落作为一条 RAG 文档。
 
     跳过空段落；表格内容暂不处理（如有需要可扩展遍历 `doc.tables`）。
     """
-    try:
-        from docx import Document
-    except ImportError as exc:
-        logger.error("加载 .docx 需要 python-docx：%s", exc)
-        return []
+    from docx import Document
 
     document = Document(str(path))
     docs: list[dict] = []
+
+    # 把每个段落作为一个 doc，丢弃空段落
     for para in document.paragraphs:
         text = para.text.strip()
         if not text:
@@ -120,18 +120,26 @@ def load_docx(path: Path) -> list[dict]:
     return docs
 
 
-# ---------------------------------------------------------------- 纯文本
+# 加载 纯文本
 def load_text(path: Path) -> list[dict]:
     """加载 .txt 等纯文本文件，按空行分段。"""
-    text = path.read_text(encoding="utf-8")
-    chunks = [c.strip() for c in text.split("\n\n") if c.strip()]
-    return [
-        {"content": c, "type": path.suffix.lstrip(".") or "text", "source": path.name}
-        for c in chunks
-    ]
+    text : str= path.read_text(encoding="utf-8")
+    raw_chunks : list[str] = text.split("\n\n")
+
+    # 把切块后的每块文本去掉首尾空白，丢弃空块
+    chunks = []
+    for c in raw_chunks:
+        stripped = c.strip()
+        if stripped:
+            chunks.append(stripped)
+
+    result : list[dict] = []
+    for c in chunks:
+        result.append({"content": c, "type": "text", "source": path.name})
+    return result
 
 
-# ---------------------------------------------------------------- 分发器
+# 分发器
 LOADERS: dict[str, Callable[[Path], list[dict]]] = {
     ".json": load_json,
     ".md": load_markdown,
@@ -143,13 +151,14 @@ LOADERS: dict[str, Callable[[Path], list[dict]]] = {
 
 
 def load_file(path: Path) -> list[dict]:
-    """根据文件后缀分发到对应 loader；未支持的后缀返回空列表。"""
-    loader = LOADERS.get(path.suffix.lower())
+    """根据文件后缀分发到对应 loader；返回类型为 list[dict]，每个 dict 至少有 `content` 字段。"""
+    loader : Callable = LOADERS.get(path.suffix.lower())
     if loader is None:
-        logger.warning("不支持的文件类型，跳过：%s", path.name)
+        logger.warning(f"不支持的文件类型，跳过：{path.name}")
         return []
+
     try:
         return loader(path)
     except Exception as exc:
-        logger.error("解析 %s 失败：%s", path, exc)
+        logger.error(f"解析 {path} 失败：{exc}")
         return []

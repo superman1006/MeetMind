@@ -20,20 +20,14 @@ from meetmind.config.settings import get_settings
 from meetmind.database.rag_retriever import RAGRetriever
 from meetmind.utils.logger import get_logger
 
-# 单轮 process 内允许 LLM 最多发起多少次 tool_calls，防止无限循环。
+# 单轮 invoke 内允许 LLM 最多发起多少次 tool_calls，防止无限循环。
 _MAX_TOOL_ITERATIONS = 5
 
 logger = get_logger(__name__)
 
 
 def clean_bad_chars(text: str) -> str:
-    """清除字符串中孤立的 UTF-16 代理码点（如 \\udce5），用 `?` 占位。
-
-    背景：当终端 locale 不是 UTF-8 时，Python 会用 `surrogateescape`
-    把无法解码的字节保存成 \\udcXX。这些"半字符"在后续传给 httpx
-    发送 HTTP body 时会因 UTF-8 编码失败而抛出
-    `'utf-8' codec can't encode ... surrogates not allowed`。
-    本函数在 LLM 调用前统一清理一次，作为最后一道防线。
+    """清除字符串中孤立的 UTF-16 代理码点，用 `?` 占位。
     """
     if not text:
         return text
@@ -42,26 +36,19 @@ def clean_bad_chars(text: str) -> str:
 
 @dataclass
 class AgentResponse:
-    """一次 Agent.process() 的产物。
-
-    内容分两类：
-      - 给人看的：`message` 由 CLI 的 rich 面板渲染展示；
-      - 给图用的：`output_role` / `done` / `used_rag` / `rag_sources`
-        由 graph/builder._make_node_fn 提取后写入共享的 `AgentState`，
-        驱动后续条件边路由。
+    """
+    一次 Agent.invoke() 的产物，后续会被选择部分参数放到 AgentState 中。
     """
     agent_name: str
     role: str
     message: str
-    output_role: str | None  # 下一个发言 agent；None 表示讨论结束
+    next_agent: str | None  # 下一个发言 agent；None 表示讨论结束
     done: bool = False
     used_rag: bool = False
-    rag_sources: list[str] = field(default_factory=list)
 
 
 class BaseAgent(ABC):
     """所有协作 Agent 的抽象基类。
-
     子类只需重写 `system_prompt` 属性来定义角色人设；公共能力（绑定 LLM、
     持有专属 RAGRetriever、tool_calls 循环、路由标记解析）都在这里实现。
     """
@@ -92,35 +79,62 @@ class BaseAgent(ABC):
         """子类必须实现：返回该角色专属的 system prompt（人设 + 工作风格 + 约束）。"""
         pass
 
-    def _build_user_prompt(self, requirement: str, history: str) -> str:
-        """构建用户提示词，包含需求和已有讨论历史。
+    def _user_prompt(self, requirement: str, history: str) -> str:
+        """构建用户提示词。
 
-        注意：私有知识库（RAG）不再预先注入到提示词里，而是作为工具暴露给 LLM；
-        LLM 自己根据问题判断是否调用 `rag_search_<agent>` 来检索历史经验。
+        三个关键设计：
+        1) 标签写"用户输入"而非"项目需求" —— 后者会让 LLM 把闲聊也当成项目去拆解；
+        2) 把"字面指令优先"作为元规则放在最前面，且优先级高于角色默认行为；
+        3) 私有知识库（RAG）不预注入到提示词里，由 LLM 自主决定是否调用
+           `rag_search_<agent>` 工具检索历史经验。
         """
         return (
-            f"## 项目当前需求\n{requirement}\n\n"
+            f"## 用户输入\n{requirement}\n\n"
             f"## 已有讨论历史\n{history or '(尚无讨论)'}\n\n"
+            "## 元规则（优先级最高，高于你的角色默认行为）\n"
+            "1. 如果用户输入里有明确的字面指令（例如：『不用查数据库』『简短回答』"
+            "『每个人都说 hello』『直接回答即可』），**必须严格遵守**，不要无视、"
+            "不要扩展、不要加戏。\n"
+            "2. 如果用户输入只是闲聊或简单指令（不是真正的项目/技术需求），就照字面"
+            "意思回应一句即可，不要拆解、不要写用户故事、不要写接口设计。\n"
+            "3. 仅当用户输入确实是一个项目/技术需求时，才以下面的角色身份做拆解、"
+            "设计、用例规划等动作。\n\n"
             "## 你的任务\n"
-            f"以 {ROLE_DESCRIPTIONS.get(self.name, self.name)} 的身份发表看法、建议或下一步行动。"
-            "如果需要参考你过去的工作经验 / 代码 / 文档，请调用提供的 RAG 工具进行检索；"
-            "如果问题完全无需历史背景，可直接回答。最后按系统指示选择下一个 agent。"
+            f"以 {ROLE_DESCRIPTIONS.get(self.name, self.name)} 的身份回应上面的输入。"
+            "若问题与你的过往经验 / 代码 / 文档可能相关，可调用 RAG 工具检索；"
+            "若用户明确说不用 RAG，或问题与历史无关，直接回答即可。"
+            "最后按系统指示选择下一个 agent。"
         )
 
-    def _routing_instructions(self) -> str:
+    def _routing_prompt(self) -> str:
         """返回拼接到 system_prompt 末尾的路由指令文本。
 
         告诉 LLM：回复最后必须用 `[NEXT_AGENT: xxx]` 或 `[DONE]` 单行标注，
         以便 `_parse_routing()` 能把发言权稳定地交给下一个 agent。
         """
-        peers = ", ".join(a for a in AGENT_NAMES if a != self.name)
+        peers_list = []
+        for a in AGENT_NAMES:
+            if a != self.name:
+                peers_list.append(a)
+        peers = ", ".join(peers_list)
         return (
             "\n\n=== 路由指令（非常重要） ===\n"
             "你的回复必须在最后一行单独标注路由指令，格式严格如下之一：\n"
             f"  [NEXT_AGENT: <agent_name>]   # 把发言权交给指定 agent，可选项: {peers}\n"
-            "  [DONE]                       # 仅当你是架构师且认为整个需求已完成时使用\n"
+            "  [DONE]                       # 架构师专用：用户需求已处理完毕，结束本轮讨论\n"
             "其他 agent（非架构师）回复结束后默认应回到架构师：写 [NEXT_AGENT: architect]。\n"
-            "不要在标记的同一行写任何其他内容。"
+            "不要在标记的同一行写任何其他内容。\n\n"
+            "=== 反循环硬规则（违反会让讨论卡到 max_iterations）===\n"
+            "1. 严禁重复别人或自己之前说过的话：先扫一眼上面的「已有讨论历史」，\n"
+            "   如果你打算说的内容已经有人说过类似的，要么补充新角度，要么不说。\n"
+            "2. 如果用户输入只是闲聊/打招呼/简单 Q&A，架构师应该自己一句话回完就 [DONE]，\n"
+            "   不要无意义地路由到 pm / backend / frontend / tester。\n"
+            "3. 如果你（非架构师）发现自己只能输出寒暄性回复、没有专业信息可补充，\n"
+            "   仍然要交回 architect（写 [NEXT_AGENT: architect]），由 architect 决定 [DONE]。\n"
+            "4. **反喧宾夺主**：如果用户输入里点名了具体角色（如「pm 查 X」「让 backend 做 Y」），\n"
+            "   架构师【绝不能】自己先调用 rag_search_architect 等工具去做那件事，\n"
+            "   也不能自己代答；唯一动作是简短引导一句 + [NEXT_AGENT: <被点名的角色>]，\n"
+            "   让该角色用它自己的 RAG / 专业能力去完成。"
         )
 
     # ---------- 核心处理 ----------
@@ -138,25 +152,24 @@ class BaseAgent(ABC):
           4. 用正则解析最终回复中的 `[NEXT_AGENT: …]` / `[DONE]` 路由标记。
         """
 
-        # 1) 预清理代理码点 — 终端非 UTF-8 区域时 Python 会用 surrogateescape
-        #    把高位字节存成 \udcXX，httpx 序列化 HTTP body 会因此崩溃。
+        # 1) clean_bad_chars 清理乱码
         requirement = clean_bad_chars(requirement)
         conversation_history = clean_bad_chars(conversation_history)
 
         # 2) 准备 prompts + 绑定 RAG 工具到 LLM
         self.RAGRetriever.restart()
-        rag_tool = self.RAGRetriever.as_langchain_tool()
+        rag_tool = self.RAGRetriever.get_tool()
         model_with_tools = self._model.bind_tools([rag_tool])
 
-        system_prompt = clean_bad_chars(
-            # 两段文字: 1) 角色人设与指令；2) 路由指令（非常重要）
-            self.system_prompt + self._routing_instructions()
-        )
         user_prompt = clean_bad_chars(
-            self._build_user_prompt(
+            self._user_prompt(
                 requirement=requirement,
                 history=conversation_history,
             )
+        )
+        system_prompt = clean_bad_chars(
+            # 两段文字: 1) 角色人设与指令；2) 路由指令（非常重要）
+            self.system_prompt + self._routing_prompt()
         )
 
         messages: list = [
@@ -168,17 +181,21 @@ class BaseAgent(ABC):
         final_text = ""
         try:
             for _ in range(_MAX_TOOL_ITERATIONS):
+                # 调用模型得到 AIMessage
                 ai_msg: AIMessage = model_with_tools.invoke(messages)
                 messages.append(ai_msg)
 
-                tool_calls = getattr(ai_msg, "tool_calls", None) or []
+                # 拿到所有 tool 的列表
+                # getattr 可以获取 ai_msg 中的 tool_calls 属性，没有则返回 []
+                tool_calls = getattr(ai_msg, "tool_calls", [])
+
+                # 当前轮没有 tool_calls 了 → 认为 LLM 的回答已经完成，跳出循环
                 if not tool_calls:
-                    # 模型不再要求调用工具 → 把这一轮的回答作为最终输出
-                    final_text = (
-                        ai_msg.content
-                        if isinstance(ai_msg.content, str)
-                        else str(ai_msg.content)
-                    )
+                    # 模型调用完 tool_calls里面的工具后,整理 final_text准备路由解析
+                    if isinstance(ai_msg.content, str):
+                        final_text = ai_msg.content        # 本来就是字符串，直接用
+                    else:
+                        final_text = str(ai_msg.content)   # 不是字符串，强制转成字符串
                     break
 
                 # 执行每一个 tool_call，把结果追加为 ToolMessage
@@ -203,7 +220,7 @@ class BaseAgent(ABC):
                     f"[NEXT_AGENT: {ARCHITECT}]"
                 )
         except Exception as exc:
-            logger.error("[%s] LLM 调用失败: %s", self.name, exc)
+            logger.error(f"[{self.name}] LLM 调用失败: {exc}")
             final_text = (
                 f"(LLM 调用失败: {exc})\n"
                 # 其他角色回答出错后默认回退给架构师
@@ -211,26 +228,23 @@ class BaseAgent(ABC):
             )
 
         # 4) 解析路由标记
-        output_role, done = self._parse_routing(final_text)
+        output_role, done = self._get_next_agent(final_text)
 
         return AgentResponse(
             agent_name=self.name,
             role=self.role,
             message=final_text.strip(),
-            output_role=output_role,
+            next_agent=output_role,
             done=done,
             used_rag=self.RAGRetriever.call_count > 0,
-            rag_sources=list(self.RAGRetriever.last_query_sources),
         )
 
     # ---------- 辅助方法 ----------
 
     @staticmethod
-    def _parse_routing(text: str) -> tuple[str | None, bool]:
+    def _get_next_agent(text: str) -> tuple[str | None, bool]:
         """从 LLM 回复中提取路由信号，返回 `(next_agent, done)`。
-
-        - 若文本含 `[DONE]` → 返回 `(None, True)`，整轮讨论结束。
-          （提示词里只允许架构师产出 [DONE]，其他角色出现一律视为同样语义。）
+        - 若文本含 `[DONE]` → 返回 `(None, True)`
         - 否则按正则 `[NEXT_AGENT: name]` 提取下一发言人；若 name 不在
           已知 agent 列表中或正则匹配失败，则兜底回到架构师，保证图不会卡死。
         """

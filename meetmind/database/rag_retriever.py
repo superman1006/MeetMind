@@ -1,7 +1,14 @@
-"""每个 Agent 私有的 RAG 检索工具。
+"""每个 Agent 私有的 RAG 检索工具：ES 混合检索 + Cohere rerank。
 
-封装对该 Agent 专属 Chroma collection 的相似度查询，并能以
-`langchain_core.tools.Tool` 的形式暴露给 LLM 做 function-calling。
+流程（针对一次 query）：
+  1) BM25 检索：ES match query 拉 top_n_bm25 候选；
+  2) 向量检索：query → embedding，ES dense_vector kNN 拉 top_n_knn 候选；
+  3) 合并去重：按 ES _id 取并集；
+  4) Cohere Rerank：把合并后的候选送 `rerank-v4.0-pro`，按相关性重排；
+  5) 取 rerank 后的 top-K 给 LLM。
+
+把检索器通过 `to_tool()` 暴露成 LangChain Tool，LLM 用 function-calling
+按需调用，由 `BaseAgent.invoke()` 的 tool_calls 循环执行。
 """
 
 from __future__ import annotations
@@ -11,138 +18,220 @@ from dataclasses import dataclass
 from langchain_core.tools import Tool
 
 from meetmind.config.settings import get_settings
-from meetmind.database.client import get_agent_collection
+from meetmind.database.client import get_agent_index, get_es_client
+from meetmind.database.embedding import embed
+from meetmind.database.reranker import rerank, RerankedDoc
 from meetmind.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
+# ---------------------------------------------------------------- 数据类
 @dataclass
 class RetrievedDoc:
-    """Chroma 一次查询命中的单条结果。
-    - `content`   原始文档文本
-    - `metadata`  灌库时附加的元数据（type / date / source）
-    - `relevance` 由距离换算而来的相似度（1 - distance，越大越相关）
+    """混合检索 + rerank 之后命中的单条结果。
+
+    - `content`         原始文档文本
+    - `metadata`        灌库时附加的 type / date / source
+    - `relevance_score` Cohere rerank 的相关性分数 (0~1, 越大越相关)
     """
 
     content: str
     metadata: dict
-    relevance: float
+    relevance_score: float = 0.0
 
     def as_context_line(self) -> str:
         """格式化为单行字符串，便于拼成 prompt 上下文块。"""
         meta = self.metadata or {}
-        tag = meta.get("type", "note")
-        date = meta.get("date", "")
-        return f"- [{tag}{' / ' + date if date else ''}] {self.content}"
+        tag = meta.get("type") or "note"
+        date = meta.get("date") or ""
+        if date:
+            return f"- [{tag} / {date}] {self.content}"
+        return f"- [{tag}] {self.content}"
+
 
 
 class RAGRetriever:
-    """绑定到单个 agent 的 Chroma 集合。
+    """绑定到单个 agent 的 ES index，提供 (BM25 + 向量) 混合检索 + Cohere rerank。
 
-    除了检索本身，还跟踪两件事供调用方读取：
-      - `call_count`：本轮内被 LLM 调用了多少次（重置由 `reset_tracking()` 触发）
-      - `last_query_sources`：最后一次检索命中的 source 列表
+    每个 Agent 实例化时持有一个独立的 RAGRetriever。
+    `restart()` 在每轮 Agent.invoke() 开头被调用，只用于清零 call_count。
     """
 
     def __init__(self, agent_name: str):
         self.agent_name = agent_name
-        self._collection = get_agent_collection(agent_name)
-        # 调用追踪 —— 在一轮 Agent.process() 里复用，便于上报 used_rag / rag_sources
+        # ensure_agent_index 是幂等的；这里调一次保证 index 存在
+        self.index_name = get_agent_index(agent_name)
+        # 本轮调用计数，BaseAgent 通过它判断是否要在面板上标 "📚 调用过 RAG"
         self.call_count: int = 0
-        self.last_query_sources: list[str] = []
 
     def restart(self) -> None:
-        """每轮 Agent.process() 开始前调用，清零调用次数和来源记录。"""
+        """每轮 Agent.invoke() 开始前调用，清零调用次数。"""
         self.call_count = 0
-        self.last_query_sources = []
 
-    def retrieve(self, query: str, top_k: int | None = None) -> list[RetrievedDoc]:
-        """对 query 做语义检索，返回 top_k 条 RetrievedDoc。
+    # client.search()返回的结果的结构:
+    # {
+    #     "hits": {
+    #         "total": {"value": 100},
+    #         "hits": [
+    #             {
+    #                 "_id": "abc123",
+    #                 "_score": 1.5,
+    #                 "_source": {
+    #                     "content": "用户认证采用 JWT 方案",
+    #                     "metadata": {"type": "note", "date": "2024-01"}
+    #                 }
+    #             },
+    #             {
+    #                 同上
+    #             }
+    #         ]
+    #     }
+    # }
 
-        `top_k` 未指定时取 Settings.rag_top_k（默认 3）。
-        失败会被吞掉并打 warning，返回空列表，调用方不必再做异常处理。
-        """
-        if top_k is None:
-            top_k = get_settings().rag_top_k
+    def _bm25_search(self, query: str, size: int) -> list[dict]:
+        """ES BM25 关键词检索。返回 list of {_id, score, _source} """
+        client = get_es_client()
 
+        # body 是 ES的 向量检索 指定请求格式
+        # body 结构参考 ES DSL：https://www.elastic.co/guide/en/elasticsearch/reference/current/query-dsl-match-query.html
+        body = {
+            "query": {
+                "match": {
+                    "content": query
+                }
+            },
+            "_source": ["content", "metadata"],
+            "size": size,
+        }
         try:
-            # Chroma 收到 query_texts 后，会用内置的 ONNX MiniLM 模型把这段文字转成一个向量，然后在数据库里找余弦距离最近的 3 条记录返回
-            results = self._collection.query(
-                query_texts=[query],
-                n_results=top_k,
-                # 只返回这三个字段，默认还会返回 ids 和 embeddings，但我们不需要
-                include=["documents", "metadatas", "distances"],
-            )
+            resp = client.search(index=self.index_name, body=body)
         except Exception as exc:
-            logger.warning("[%s] RAG query failed: %s", self.agent_name, exc)
+            logger.warning(f"[{self.agent_name}] BM25 检索失败: {exc}")
+            return []
+        return list(resp["hits"]["hits"])
+
+    def _knn_search(self, query: str, size: int) -> list[dict]:
+        """ES dense_vector kNN 向量检索。"""
+        client = get_es_client()
+        query_vec = embed(query)
+        # body 是 ES的 knn 指定请求格式
+        # body 结构参考 ES DSL：https://www.elastic.co/guide/en/elasticsearch/reference/current/query-dsl-knn-query.html
+
+        body = {
+            "knn": {
+                "field": "embedding",
+                "query_vector": query_vec,
+                "k": size,
+                "num_candidates": max(size * 5, 100),
+            },
+            "_source": ["content", "metadata"],
+            "size": size,
+        }
+        try:
+            resp = client.search(index=self.index_name, body=body)
+        except Exception as exc:
+            logger.warning(f"[{self.agent_name}] kNN 检索失败: {exc}")
+            return []
+        return list(resp["hits"]["hits"])
+
+    @staticmethod
+    def _merge(bm25_hits: list[dict], knn_hits: list[dict]) -> list[dict]:
+        """按 _id 取并集去重；保持顺序（BM25 在前，kNN 补充）。"""
+        seen: set[str] = set()
+        merged_content: list[dict] = []
+        for hit in bm25_hits:
+            doc_id = hit["_id"]
+            if doc_id in seen:
+                continue
+            seen.add(doc_id)
+            merged_content.append(hit)
+        for hit in knn_hits:
+            doc_id = hit["_id"]
+            if doc_id in seen:
+                continue
+            seen.add(doc_id)
+            merged_content.append(hit)
+        return merged_content
+
+    # ---------- 公开检索接口 ----------
+    def retrieve(self, query: str, top_n: int | None = None) -> list[RetrievedDoc]:
+        """混合检索 + Cohere rerank，返回最终的 top_n 条 RetrievedDoc。
+
+        参数 `top_n` 是 rerank 之后给 LLM 的条数，默认取 Settings.rerank_top_n（5）。
+        BM25 / kNN 各自捞的候选数走 Settings.retrieve_top_n（20）。
+        """
+
+        # 拿到 召回数 和 rerank 数
+        settings = get_settings()
+        # 调用一次 检索
+        self.call_count += 1
+
+        if top_n is None:
+            top_n = settings.rerank_top_n
+        candidate_n = settings.retrieve_top_n
+
+        # 1) 两路检索
+        knn_hits = self._knn_search(query, size=candidate_n)
+        bm25_hits = self._bm25_search(query, size=candidate_n)
+
+        # 2) 合并去重
+        merged_hits = self._merge(bm25_hits, knn_hits)
+        if not merged_hits:
+            logger.info(f"[{self.agent_name}] 混合检索: 命中 0 条")
             return []
 
-        docs = results.get("documents", [[]])[0]
-        metas = results.get("metadatas", [[]])[0]
-        dists = results.get("distances", [[]])[0]
+        logger.info(
+            f"[{self.agent_name}] 混合检索: BM25 检索到{len(bm25_hits)}个 chunk + kNN 检索到{len(knn_hits)}个chunk "
+            f"→ 去重后 {len(merged_hits)} 条chunks 送入 rerank"
+        )
 
-        return [
-            RetrievedDoc(
-                content=doc,
-                metadata=meta or {},
-                relevance=max(0.0, 1.0 - float(dist)),
+        # 3) Cohere rerank
+        source_contents: list[str] = []
+        for hit in merged_hits:
+            # 拿到 文本数据
+            content = hit["_source"].get("content", "")
+            source_contents.append(content)
+
+        reranked : list[RerankedDoc] = rerank(query=query, documents=source_contents, top_n=top_n)
+
+        # 4) 按 rerank 顺序拼 RetrievedDoc
+        result: list[RetrievedDoc] = []
+        for r in reranked:
+            hit = merged_hits[r.index]
+            source = hit["_source"]
+            doc = RetrievedDoc(
+                content=source.get("content", ""),
+                metadata=source.get("metadata") or {},
+                relevance_score=r.relevance_score,
             )
-            for doc, meta, dist in zip(docs, metas, dists)
-        ]
+            result.append(doc)
 
-    def retrieve_as_context(self, query: str, top_k: int | None = None) -> str:
-        """返回用于提示词 / 工具结果的格式化上下文块；同时更新调用追踪状态。"""
-        docs = self.retrieve(query, top_k=top_k)
-        self.call_count += 1
-        self.last_query_sources = [d.metadata.get("source", "") for d in docs]
-        if not docs:
-            return "(知识库中未找到相关条目)"
-        return "\n".join(d.as_context_line() for d in docs)
+        return result
 
-    def add_documents(self, docs: list[dict]) -> int:
-        """运行时往该 agent 的 collection 增量写入文档。
 
-        典型用途：把一轮讨论的产物（例如新的决策、代码片段）回写进 RAG，
-        让该 agent 下次能"记起"自己说过什么。doc_id 用时间戳保证唯一。
-        返回实际写入的条数。
+
+    def get_tool(self) -> Tool:
         """
-        if not docs:
-            return 0
-        import time
-
-        ids = [f"{self.agent_name}_run_{int(time.time() * 1000)}_{i}" for i in range(len(docs))]
-        self._collection.add(
-            ids=ids,
-            documents=[d["content"] for d in docs],
-            metadatas=[
-                {
-                    "type": d.get("type", "note"),
-                    "date": d.get("date", ""),
-                    "source": d.get("source", "runtime"),
-                }
-                for d in docs
-            ],
-        )
-        return len(docs)
-
-    def as_langchain_tool(self) -> Tool:
-        """把检索器暴露为 LangChain `Tool`，供 LLM 通过 function-calling 调用。
-
-        工具名为 `rag_search_<agent_name>`，参数是一个自然语言 `query` 字符串，
-        返回格式化后的检索结果（每行一条命中文档）。
+        把_rag_search 封装成 LangChain Tool，供 LLM function-calling 调用。
         """
 
-        def _run(query: str) -> str:
-            return self.retrieve_as_context(query)
+        def _rag_search(query: str) -> str:
+            """返回用于 prompt / 工具结果的格式化上下文块。"""
 
-        return Tool(
-            name=f"rag_search_{self.agent_name}",
-            description=(
-                f"检索 {self.agent_name} 的私有知识库（工作日志 / 代码片段 / 设计文档）。"
-                "当你认为当前问题可能与历史经验、既有约定、过往实现相关时调用本工具；"
-                "若问题与本角色的历史经验无关，可不调用。"
-                "参数 query：自然语言查询字符串。"
-            ),
-            func=_run,
+            # 用 retrieve 获取文档
+            docs = self.retrieve(query)
+            if not docs:
+                return "(知识库中未找到相关条目)"
+            lines: list[str] = []
+            for d in docs:
+                lines.append(d.as_context_line())
+            return "\n".join(lines)
+
+        description : str= (
+            f"检索 {self.agent_name} 的私有知识库（工作日志 / 代码片段 / 设计文档）。"
+            "当你认为当前问题可能与历史经验、既有约定、过往实现相关时调用本工具；"
+            "若问题与本角色的历史经验无关，可不调用。"
+            "参数 query：自然语言查询字符串。"
         )
+        return Tool(name=f"rag_search_{self.agent_name}", description=description, func=_rag_search)

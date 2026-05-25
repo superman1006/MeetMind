@@ -1,0 +1,39 @@
+# 本地单节点 Elasticsearch，供 MeetMind 做 RAG 存储 + 混合检索使用。
+#
+# 启动:    docker compose up -d
+# 健康:    curl http://localhost:9200
+# 停止:    docker compose down            (保留数据)
+# 抹库:    docker compose down -v         (连数据卷一起删，会触发下次启动重灌种子)
+
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.3
+    container_name: meetmind-es
+    environment:
+      # 单节点模式，省得配 cluster
+      - discovery.type=single-node
+      # 本地开发关掉 TLS + 鉴权，免去配 cert / api key 的麻烦
+      - xpack.security.enabled=false
+      - xpack.security.http.ssl.enabled=false
+      # JVM 堆。本机够用即可，调大也行
+      - ES_JAVA_OPTS=-Xms1g -Xmx1g
+      # 关掉 ML/geoip 等不需要的特性，加快启动
+      - xpack.ml.enabled=false
+      - ingest.geoip.downloader.enabled=false
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    ports:
+      - "9200:9200"
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9200/_cluster/health | grep -q '\"status\":\"yellow\\|green\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  es_data:
+    driver: local

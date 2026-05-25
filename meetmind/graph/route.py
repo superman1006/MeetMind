@@ -12,12 +12,12 @@ from meetmind.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-def route_next(state: AgentState) -> str:
+def route_to_which_agent(state: AgentState) -> str:
     """根据上一 agent 的输出决定下一图节点。
 
     优先级：
       1. 达到迭代上限 -> END（安全保护）。
-      2. `complete` 为真 -> END（架构师宣布完成）。
+      2. `done` 为真 -> END（架构师宣布完成）。
       3. `next_agent` 指向已知 agent -> 路由到该处。
       4. 默认 -> 回到架构师以保持讨论继续。
     """
@@ -34,7 +34,7 @@ def route_next(state: AgentState) -> str:
         return END
 
     # 当迭代<max且任务已完成时,路由到 END 节点
-    if state.get("complete"):
+    if state.get("done"):
         return END
 
     # 当以上两个条件都不满足时,根据 next_agent 字段路由到指定 agent 的节点

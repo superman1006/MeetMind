@@ -15,10 +15,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 class Settings(BaseSettings):
     """MeetMind 的全部运行时配置。
-
-    从环境变量与项目根目录 .env 读取。
-    字段名与环境变量大小写不敏感映射
-    （例如 `api_key` <- `API_KEY`）。
+    pydantic 的 BaseSettings 会从 model_config 定义的 env_file（这里是项目根目录下的 .env）
+    加载环境变量，并把它们映射到类属性上。
     """
     model_config = SettingsConfigDict(
         env_file=PROJECT_ROOT / ".env",
@@ -27,44 +25,53 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # 兼容 OpenAI 的 LLM 端点（如小米 MiMo）
+    # ---------- LLM (OpenAI 兼容) ----------
     api_key: str = Field(default="", description="LLM API key")
     base_url: str = Field(default="", description="LLM API base URL")
-    model_name: str = Field(default="", description="Model identifier")
-
-    # 生成参数
+    model_name: str = Field(default="", description="Chat model identifier")
     max_tokens: int = Field(default=2000)
     temperature: float = Field(default=0.4)
 
-    # 数据库 — RAG 数据位于项目根目录（与 data/、tests/ 同级）
-    chroma_base_path: Path = Field(default=PROJECT_ROOT / "chroma_data")
+    # ---------- 种子文件（输入） ----------
     seed_data_path: Path = Field(default=PROJECT_ROOT / "data" / "seed")
 
-    # 日志
+    # ---------- Elasticsearch (存储 + BM25 + 向量) ----------
+    es_url: str = Field(default="http://localhost:9200")
+    es_api_key: str = Field(default="", description="可空；本地 docker ES 默认关闭鉴权时留空即可")
+    es_index_prefix: str = Field(default="meetmind", description="实际 index 名 = <prefix>_<agent>")
+
+    # ---------- Embedding (本地 sentence-transformers) ----------
+    embedding_model_name: str = Field(default="sentence-transformers/all-MiniLM-L6-v2")
+
+    # ---------- Cohere Rerank ----------
+    cohere_api_key: str = Field(default="")
+    cohere_rerank_model: str = Field(default="rerank-v4.0-pro")
+
+    # ---------- 检索参数 ----------
+    retrieve_top_n: int = Field(default=20, description="ES BM25 + kNN 各自捞这么多候选送 rerank")
+    rerank_top_n: int = Field(default=5, description="Cohere rerank 后给 LLM 的最终条数")
+
+    # ---------- 日志 / 安全阀 ----------
     log_level: str = Field(default="INFO")
+    max_iterations: int = Field(default=15, description="LangGraph 单轮最大节点数")
 
-    # 运行时限制
-    max_iterations: int = Field(default=15, description="Safety cap on graph loops")
-    rag_top_k: int = Field(default=3)
-
-    # ---- 路径校验：把 .env 里写的相对路径锚定到项目根，避免不同 cwd 下解析到错位 ----
-    @field_validator("chroma_base_path", "seed_data_path", mode="after")
+    # ---- 路径校验：把 .env 里写的相对路径锚定到项目根 ----
+    @field_validator("seed_data_path", mode="after")
     @classmethod
     def _resolve_relative_to_project_root(cls, v: Path) -> Path:
         """把相对路径解析为相对 PROJECT_ROOT 的绝对路径。
 
-        例如 `.env` 里写 `CHROMA_BASE_PATH=./chroma_data`，无论从哪个 cwd
-        启动都会解析为 `<PROJECT_ROOT>/chroma_data`，而不是当前目录下的同名目录。
+        例如 `.env` 里写 `SEED_DATA_PATH=./data/seed`，无论从哪个 cwd
+        启动都会解析为 `<PROJECT_ROOT>/data/seed`，而不是当前目录下的同名目录。
         """
-        if not v.is_absolute():
-            return (PROJECT_ROOT / v).resolve()
-        return v
+        if v.is_absolute():
+            return v
+        resolved = (PROJECT_ROOT / v).resolve()
+        return resolved
 
 
-
-# @lru_cache 让 get_settings() 在第一次调用时创建一个 Settings 实例并将其缓存起来。
-# 之后的调用的都是缓存的实例。确保了整个程序中使用同一个对象，避免了重复读取。
-# 是单例——整个程序生命周期只读一次 .env，不管被谁调用多少次，永远返回同一个 Settings 对象。
+# @lru_cache 让 get_settings() 在第一次调用时创建一个 Settings 实例并将其 缓存 起来。
+# 之后的调用都是缓存的实例。是单例——整个程序生命周期只读一次 .env。
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     """单例配置访问器。"""

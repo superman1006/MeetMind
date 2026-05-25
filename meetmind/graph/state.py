@@ -12,12 +12,12 @@ from typing import Annotated, TypedDict
 
 
 class MessageTurn(TypedDict):
-    """一次 agent 发言的不可变快照，会被追加进 `AgentState.messages`。"""
+    """根据每个 agent 调用后输出的 AgentResponse 筛选出要放入 AgentState 的，会被追加进 `AgentState.messages`。"""
 
     agent_name: str
     role: str
     message: str
-    output_role: str | None  # 该 agent 指定的下一发言人；None 表示已结束
+    next_agent: str | None  # 该 agent 指定的下一发言人；None 表示已结束
 
 
 class AgentState(TypedDict, total=False):
@@ -33,7 +33,7 @@ class AgentState(TypedDict, total=False):
     next_agent: str | None
 
     # 完成信号；架构师输出 `[DONE]` 时被置 True，触发条件边走向 END
-    complete: bool
+    done: bool
 
     # 已执行的节点轮次数；用于和 Settings.max_iterations 比较，防死循环
     iteration: int

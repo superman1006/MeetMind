@@ -1,8 +1,8 @@
-"""用种子文档初始化每个 agent 的 Chroma 数据库。
+"""用种子文档初始化每个 agent 的 ES index。
 
 种子目录结构：
     data/seed/
-        architect/    ← 这个子目录里的所有支持格式文件都会被灌入 architect 的 collection
+        architect/    ← 这个子目录里的所有支持格式文件都会被灌入 architect 的 index
             seeds.json
             roadmap.pdf
             decisions.md
@@ -11,24 +11,28 @@
             api_spec.docx
         ...
 
-每个文件按其后缀走 `loaders.py` 里对应的 loader：
-    .json  → load_json
-    .md    → load_markdown
-    .pdf   → load_pdf
-    .docx  → load_docx
-    .txt   → load_text
+每个文件按其后缀走 `loaders.py` 里对应的 loader，然后过 `splitters.split_docs`
+按文件类型切块，再用 `embedding.embed_batch` 算向量，最后用 ES 的 bulk API
+批量写入。doc_id 基于内容 md5，保证幂等。
 """
 
 from __future__ import annotations
 
 import hashlib
-import shutil
 from pathlib import Path
+
+from elasticsearch.helpers import bulk
 
 from meetmind.config.constants import AGENT_NAMES
 from meetmind.config.settings import get_settings
-from meetmind.database.client import get_agent_client, get_agent_collection
+from meetmind.database.client import (
+    delete_agent_index,
+    get_agent_index,
+    get_es_client,
+)
+from meetmind.database.embedding import embed_batch
 from meetmind.database.loaders import load_file
+from meetmind.database.splitters import split_docs
 from meetmind.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -36,31 +40,23 @@ logger = get_logger(__name__)
 
 def _agent_seed_dir(agent_name: str) -> Path:
     """返回 `data/seed/<agent_name>/`。"""
-    return get_settings().seed_data_path / agent_name
+    seed_root = get_settings().seed_data_path
+    return seed_root / agent_name
 
 
 def _get_seeds_content(agent_name: str) -> list[dict]:
     """扫描 agent 子目录下所有受支持的文件，返回合并后的文档列表。
-    如果新结构目录不存在，回退到旧文件 `<agent>_seeds.json`（向后兼容）。
-    返回的内容是
-    [
-        {
-            "content": "这是文档内容，字符串",
-            "type": "note",  # 可选，默认为 "note"，表示文档类型；也可以是 "decision"、"requirement" 等，后续可用于分类检索
-            "date": "2024-06-01",  # 可选，表示文档的日期，字符串格式不限，但建议统一规范（如 ISO 8601）
-            "source": "roadmap.pdf",  # 可选，表示文档来源，如文件名或 URL，便于后续追溯
-        },
-        ...
-    ]
+
+    每个元素至少有 `content` 字段，其它键（type / date / source）作为 metadata 存。
+    若目录不存在，回退到旧布局 `data/seed/<agent>_seeds.json`（向后兼容）。
     """
     agent_dir = _agent_seed_dir(agent_name)
 
     if not agent_dir.exists():
-        # 兼容旧布局：data/seed/<agent>_seeds.json
         legacy_file = get_settings().seed_data_path / f"{agent_name}_seeds.json"
         if legacy_file.exists():
             return load_file(legacy_file)
-        logger.warning("没有 %s 的种子目录或旧种子文件", agent_name)
+        logger.warning(f"没有 {agent_name} 的种子目录或旧种子文件")
         return []
 
     docs: list[dict] = []
@@ -69,7 +65,7 @@ def _get_seeds_content(agent_name: str) -> list[dict]:
             continue
         loaded = load_file(path)
         if loaded:
-            logger.info("[%s] 从 %s 加载了 %d 段", agent_name, path.name, len(loaded))
+            logger.info(f"[{agent_name}] 从 {path.name} 加载了 {len(loaded)} 段")
         docs.extend(loaded)
     return docs
 
@@ -80,69 +76,116 @@ def _generate_doc_id(agent_name: str, content: str) -> str:
     return f"{agent_name}_{digest}"
 
 
-def _update_agent_collection(agent_name: str) -> int:
-    """把 agent 子目录下所有文件解析后写入其 Chroma collection。
+def _get_existing_ids(index_name: str) -> set[str]:
+    """读出 index 内所有现有 doc id（用于跳过已灌过的内容，保证幂等）。"""
+    client = get_es_client()
+    if not client.indices.exists(index=index_name):
+        return set()
 
-    通过基于内容 hash 的 doc_id 实现幂等：再次运行时已存在的文档会被跳过，
-    返回值是【这次新增】的文档数量。
+    existing: set[str] = set()
+    # scroll 取全量；种子集合通常很小，简单实现就够
+    resp = client.search(
+        index=index_name,
+        body={"_source": False, "query": {"match_all": {}}},
+        size=10000,
+    )
+    for hit in resp["hits"]["hits"]:
+        existing.add(hit["_id"])
+    return existing
+
+
+def load_seeds_to_es(agent_name: str) -> int:
+    """把单个 agent 子目录下的所有种子文件灌入它的 ES index。
+
+    步骤：
+      1. 扫描 + load_file 把各种格式解析成 list[dict]
+      2. split_docs 按文件类型切块
+      3. 跳过已存在的 doc_id（基于内容 md5）
+      4. embed_batch 算 dense vector
+      5. bulk index 到 ES
+
+    返回本次实际新增的文档条数。
     """
-    collection = get_agent_collection(agent_name)
-    seeds_contents = _get_seeds_content(agent_name)
-    if not seeds_contents:
+    seed_contents = _get_seeds_content(agent_name)
+    if not seed_contents:
         return 0
 
-    existing_ids = set(collection.get().get("ids") or [])
+    seed_chunks = split_docs(seed_contents)
 
-    ids: list[str] = []
-    documents: list[str] = []
-    metadatas: list[dict] = []
-    for seed in seeds_contents:
-        content = seed.get("content", "").strip()
+    index_name = get_agent_index(agent_name)
+    existing_ids = _get_existing_ids(index_name)
+
+    new_ids: list[str] = []
+    new_contents: list[str] = []
+    new_metadatas: list[dict] = []
+
+    for chunk in seed_chunks:
+        content = chunk.get("content", "").strip()
         if not content:
             continue
-        
-        # 获得文档的唯一标识 ID
         doc_id = _generate_doc_id(agent_name, content)
-        
-        # 如果有相同 id 的在库里则跳过
         if doc_id in existing_ids:
             continue
-        ids.append(doc_id)
-        documents.append(content)
-        metadatas.append(
+        new_ids.append(doc_id)
+        new_contents.append(content)
+        new_metadatas.append(
             {
-                "type": seed.get("type", "note"),
-                "date": seed.get("date", ""),
-                "source": seed.get("source", f"seed:{agent_name}"),
+                "type": chunk.get("type"),
+                "date": chunk.get("date"),
+                "source": chunk.get("source"),
             }
         )
 
-    if ids:
-        # 往 collection 里批量添加新文档；已存在的 id 会被 collection 自动忽略，不会覆盖原文档
-        # 这一步就是在 Chroma 数据库里创建新记录，文档内容会被 embedding 然后存储
-        collection.add(ids=ids, documents=documents, metadatas=metadatas)
-        logger.info("已为 %s 新增 %d 条文档", agent_name, len(ids))
-    else:
-        logger.info("%s 已是最新（共 %d 条）", agent_name, len(existing_ids))
+    if not new_ids:
+        logger.info(f"{agent_name} 已是最新（共 {len(existing_ids)} 条）")
+        return 0
 
-    return len(ids)
+    # 批量算向量
+    vectors = embed_batch(new_contents)
+
+    # 拼 bulk 操作流
+    actions = []
+    for doc_id, content, meta, vec in zip(new_ids, new_contents, new_metadatas, vectors):
+        action = {
+            "_op_type": "index",
+            "_index": index_name,
+            "_id": doc_id,
+            "_source": {
+                "content": content,
+                "embedding": vec,
+                "metadata": meta,
+            },
+        }
+        actions.append(action)
+
+    client = get_es_client()
+
+    # bulk API 批量写入；refresh=wait_for 确保写入后才能被搜索到（虽然会稍微慢一点，但保证了后续流程的正确性）
+    success, errors = bulk(client, actions, refresh="wait_for")
+    if errors:
+        logger.warning(f"[{agent_name}] bulk index 部分失败: {errors}")
+
+    logger.info(f"已为 {agent_name} 新增 {success} 条文档")
+    return int(success)
 
 
-def initialize_all_agents() -> dict[str, int]:
-    """为所有 agent 灌入种子数据（幂等）。返回每个 agent 本次新增的文档数。"""
-    return {agent: _update_agent_collection(agent) for agent in AGENT_NAMES}
+def build_agents_indices() -> dict[str, int]:
+    """为所有 agent 灌入种子数据。返回每个 agent 本次新增的文档数。"""
+
+    # {
+    #     "architect": 5,
+    #     "backend": 3,
+    #     "frontend": 0,
+    #     "tester": 2,
+    #     "pm": 1,
+    # }
+    results: dict[str, int] = {}
+    for agent_name in AGENT_NAMES:
+        results[agent_name] = load_seeds_to_es(agent_name)
+    return results
 
 
 def reset_agent_db(agent_name: str) -> None:
-    """清空并重新灌入单个 agent 的数据库。"""
-    settings = get_settings()
-    agent_dir: Path = settings.chroma_base_path / agent_name
-
-    # 删除目录前要先清掉缓存的 PersistentClient（它持有目录的句柄）
-    get_agent_client.cache_clear()
-
-    if agent_dir.exists():
-        shutil.rmtree(agent_dir)
-        logger.info("已删除 %s", agent_dir)
-
-    _update_agent_collection(agent_name)
+    """清空并重新灌入单个 agent 的 index（开发者工具，不在启动流程中调用）。"""
+    delete_agent_index(agent_name)
+    load_seeds_to_es(agent_name)

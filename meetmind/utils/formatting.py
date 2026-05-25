@@ -47,7 +47,6 @@ def print_agent_info(
     message: str,
     next_role: str | None = None,
     used_rag: bool = False,
-    rag_sources: list[str] | None = None,
 ) -> None:
     """把一个 agent 的回复渲染成带颜色边框的 rich 面板并打印到 console。
 
@@ -61,14 +60,15 @@ def print_agent_info(
 
     footer_parts: list[str] = []
     if used_rag:
-        sources_str = ", ".join(rag_sources or []) or "(unspecified)"
-        footer_parts.append(f"📚 RAG sources: {sources_str}")
+        footer_parts.append("📚 调用过 RAG 工具")
     if next_role:
         footer_parts.append(f"➡️  Next: [bold]{next_role}[/bold]")
 
     if footer_parts:
         body.append("\n\n")
-        body.append(Text.from_markup(" | ".join(footer_parts), style="dim"))
+        footer_str = " | ".join(footer_parts)
+        footer_text = Text.from_markup(footer_str, style="dim")
+        body.append(footer_text)
 
     panel = Panel(
         body,

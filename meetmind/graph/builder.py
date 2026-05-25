@@ -14,6 +14,7 @@ from typing import Callable
 
 from langgraph.graph import END, START, StateGraph
 
+from meetmind.agents import AgentResponse
 from meetmind.agents.architect import ArchitectAgent
 from meetmind.agents.backend import BackendAgent
 from meetmind.agents.base import BaseAgent
@@ -21,7 +22,7 @@ from meetmind.agents.frontend import FrontendAgent
 from meetmind.agents.pm import PMAgent
 from meetmind.agents.tester import TesterAgent
 from meetmind.config.constants import AGENT_NAMES, ARCHITECT, BACKEND, FRONTEND, PM, TESTER
-from meetmind.graph.routing import route_next
+from meetmind.graph.route import route_to_which_agent
 from meetmind.graph.state import AgentState, MessageTurn
 from meetmind.utils.formatting import print_agent_info
 from meetmind.utils.logger import get_logger
@@ -60,33 +61,30 @@ def _create_node(agent: BaseAgent) -> Callable[[AgentState], dict]:
         iteration = state.get("iteration", 0) + 1
 
         logger.info(
-            "[graph] iter=%d  →  invoking %s_node",
-            iteration,
-            agent.name,
+            f"[graph] iteration={iteration}  →  invoking {agent.name}_node"
         )
 
-        response = agent.invoke(requirement=requirement, conversation_history=history)
+        response :AgentResponse = agent.invoke(requirement=requirement, conversation_history=history)
 
         # 实时在控制台美化输出
         print_agent_info(
             agent_name=response.agent_name,
             message=response.message,
-            next_role=response.output_role if not response.done else "DONE",
+            next_role=response.next_agent if not response.done else "DONE",
             used_rag=response.used_rag,
-            rag_sources=[s for s in response.rag_sources if s],
         )
 
         new_turn: MessageTurn = {
             "agent_name": response.agent_name,
             "role": response.role,
             "message": response.message,
-            "output_role": response.output_role,
+            "next_agent": response.next_agent,
         }
 
         return {
             "messages": [new_turn],
-            "next_agent": response.output_role,
-            "complete": response.done,
+            "next_agent": response.next_agent,
+            "done": response.done,
             "iteration": iteration,
         }
 
@@ -94,7 +92,7 @@ def _create_node(agent: BaseAgent) -> Callable[[AgentState], dict]:
     return _node
 
 
-def build_agent_graph():
+def build_graph():
     """编译并返回多 Agent 图。"""
     agents = _build_all_agents()
     graph = StateGraph(AgentState)
@@ -107,7 +105,10 @@ def build_agent_graph():
     graph.add_edge(START, f"{ARCHITECT}_node")
 
     # 3. 每个节点使用同一路由器的条件边
-    route_map = {f"{name}_node": f"{name}_node" for name in AGENT_NAMES}
+    route_map = {}
+    for name in AGENT_NAMES:
+        node_key = f"{name}_node"
+        route_map[node_key] = node_key
     route_map[END] = END
     # route_map:
     # { 'architect_node': 'architect_node',
@@ -117,13 +118,17 @@ def build_agent_graph():
     #   'pm_node': 'pm_node',
     #   'END': 'END' }
 
+    # 添加所有条件边
     for name in AGENT_NAMES:
         graph.add_conditional_edges(
             f"{name}_node",
-            route_next, # 条件函数，根据 state 决定下一节点
+            route_to_which_agent, # 条件函数，根据 state 决定下一节点
             route_map,  # 一个映射图 route_next 的返回值（如 "backend_node"）到实际节点的映射
         )
 
     graph = graph.compile()
-    logger.info("LangGraph compiled: %s", ", ".join(f"{n}_node" for n in AGENT_NAMES))
+    node_names = []
+    for n in AGENT_NAMES:
+        node_names.append(f"{n}_node")
+    logger.info(f"LangGraph compiled: {', '.join(node_names)}")
     return graph

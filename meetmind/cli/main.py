@@ -2,17 +2,25 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from datetime import datetime
+
+from dotenv import load_dotenv
+
+# uv run meetmind 直接调用 cli.main:main，不会经过根目录 main.py，
+# 所以这里也要 load_dotenv() 确保 os.environ 里有 LANGSMITH_* 变量。
+# load_dotenv() 是幂等的：若变量已在环境中则不覆盖。
+# load_dotenv()
 
 from rich.console import Console
 from rich.panel import Panel
 
 from meetmind.config.constants import AGENT_NAMES, ROLE_DESCRIPTIONS
 from meetmind.config.settings import get_settings
-from meetmind.database.client import get_agent_collection
-from meetmind.database.initializer import initialize_all_agents
-from meetmind.graph.builder import build_agent_graph
+from meetmind.database.client import count_docs, ping_es
+from meetmind.database.initializer import build_agents_indices
+from meetmind.graph.builder import build_graph
 from meetmind.graph.state import AgentState
 from meetmind.utils.formatting import format_separator, get_console, print_system
 from meetmind.utils.logger import get_logger, setup_logging
@@ -50,7 +58,7 @@ def _print_banner() -> None:
 
 
 def _bootstrap() -> None:
-    """bootstrap是引导,用来 导入配置、初始化日志、播种数据库。"""
+    """bootstrap是引导,导入配置文件,构建知识库"""
     setup_logging()
     settings = get_settings()
     print("="*40,"get_settings()拿到配置", "="*40)
@@ -61,59 +69,92 @@ def _bootstrap() -> None:
 
 
 
-    # 判断是否第一次运行（即 Chroma 数据库目录不存在或为空），首次启动会下载 embedding 模型。
-    is_first_run = not settings.chroma_base_path.exists() or not any(
-        settings.chroma_base_path.iterdir()
-    )
-    # print_system 是 console.print 的包装，带有统一的系统消息前缀和样式。
-    print_system(f"RAG 存储位置: [cyan]{settings.chroma_base_path}[/cyan] (本地 SQLite)")
-    if is_first_run:
+    # ---------- ES 健康检查（启动硬依赖） ----------
+    print_system(f"Elasticsearch 地址: [cyan]{settings.es_url}[/cyan]")
+    es_ok = ping_es()
+    if not es_ok:
         print_system(
-            "[yellow]首次启动：Chroma 会从 S3 下载 ~80MB 的 ONNX embedding 模型到 "
-            "~/.cache/chroma/，首次约 1-2 分钟，之后启动只需几秒。[/yellow]"
+            "[bold red]✗ 无法连接到 Elasticsearch[/bold red]\n"
+            "请先在项目根目录执行 [bold]docker compose up -d[/bold] 启动本地 ES，"
+            "或修改 .env 中的 ES_URL 指向已有实例。"
+        )
+        sys.exit(1)
+    print_system("[green]✓ Elasticsearch 已就绪[/green]")
+
+    # ---------- Cohere key 检查 ----------
+    if not settings.cohere_api_key:
+        print_system(
+            "[bold red]✗ 缺少 COHERE_API_KEY[/bold red]\n"
+            "请在 .env 中配置 COHERE_API_KEY（用于检索后的 rerank 阶段）。"
+        )
+        sys.exit(1)
+    print_system(
+        f"Cohere Rerank: [cyan]{settings.cohere_rerank_model}[/cyan]  "
+        f"(混合检索捞 [bold]{settings.retrieve_top_n}[/bold] → rerank 取 [bold]{settings.rerank_top_n}[/bold])"
+    )
+
+    # ---------- LangSmith 追踪状态 ----------
+    langsmith_on = os.getenv("LANGSMITH_TRACING", "").lower() == "true"
+    if langsmith_on:
+        project = os.getenv("LANGSMITH_PROJECT", "default")
+        print_system(
+            f"LangSmith 追踪: [bold green]已启用[/bold green]  "
+            f"项目: [cyan]{project}[/cyan]  "
+            f"→ https://smith.langchain.com/projects/p/{project}"
+        )
+    else:
+        print_system(
+            "LangSmith 追踪: [dim]未启用（在 .env 中设置 LANGSMITH_TRACING=true 可开启）[/dim]"
         )
 
-
-
-
-    # 在初始化之前先把每个 agent 的 seed 目录文件列出来，
-    # 让用户清楚看到自己放进去的 PDF / DOCX 等被扫描到了。
+    # ---------- 扫描种子目录 ----------
     print_system("扫描各 Agent 的 seed 文件目录：")
     for agent in AGENT_NAMES:
         agent_dir = settings.seed_data_path / agent
         if not agent_dir.exists():
-            print_system(f"   · [yellow]{agent}[/yellow]: (当前 agent 存放原始数据的目录不存在，将走旧 *_seeds.json 兜底)")
+            print_system(f"   · [yellow]{agent}[/yellow]: (目录不存在，将走旧 *_seeds.json 兜底)")
             continue
-        files = sorted(p.name for p in agent_dir.iterdir() if p.is_file() and not p.name.startswith("."))
+        all_paths = agent_dir.iterdir()
+        file_names = []
+        for p in all_paths:
+            if p.is_file() and not p.name.startswith("."):
+                file_names.append(p.name)
+        files = sorted(file_names)
         if not files:
             print_system(f"   · [yellow]{agent}[/yellow]: 目录为空")
         else:
             print_system(f"   · [cyan]{agent}[/cyan]: {len(files)} 个文件 → {', '.join(files)}")
     print()
 
+    # ---------- 预热 embedding 模型 ----------
+    # sentence-transformers 从磁盘加载到内存约 5-10 秒，且只发生一次（lru_cache）。
+    # 首次启动还会从 HuggingFace 下载约 80MB 模型到 ~/.cache/huggingface/。
+    from meetmind.database.embedding import get_embedder_model
+    with console.status("[bold cyan]预热 embedding 模型 (80MB)...",spinner="dots"):
+        get_embedder_model()
+    print_system("[green]✓[/green] embedding 模型已加载到内存")
 
+    # ---------- 灌库 (幂等) ----------
+    with console.status("[bold cyan]初始化 5 个 Agent 的 ES index...", spinner="dots"):
+        added = build_agents_indices()
 
-    # 初始化所有 agent 的知识库，并统计每个 agent 新增了多少文档。
-    with console.status("[bold cyan]初始化 5 个 Agent 的知识库...", spinner="dots"):
-        added = initialize_all_agents()
-
-    # 灌入结果 + collection 当前总文档数；这样即使本次幂等没新增，
-    # 用户也能看到 PDF 这类文件之前到底有没有进库。
+    # 灌入结果 + index 当前总文档数（让用户看到 PDF 这类文件之前到底有没有进库）
     for agent in AGENT_NAMES:
-        total = len(get_agent_collection(agent).get().get("ids") or [])
         new = added.get(agent, 0)
-        status = f"新增 [bold green]{new}[/bold green] 条，" if new else "[dim]无新增[/dim]，"
-        print_system(f"  ✓ [bold]{agent}[/bold]: {status}collection 现共 {total} 条文档")
+        if new:
+            status = f"新增 [bold green]{new}[/bold green] 条，"
+        else:
+            status = "[dim]无新增[/dim]，"
+        print_system(f"  ✓ [bold]{agent}[/bold]: {status}index 现共 {count_docs(agent)} 条文档")
 
 
 def _run_one_discussion(graph, requirement: str) -> AgentState:
-    """使用 `stream_mode='values'` 流式运行一轮由架构师主导的讨论，
-    以获取最终累积状态。"""
+    """ Session 其中的一个完整的讨论会话：从架构师输入需求开始，图驱动 agent 讨论，直到架构师宣布完成。"""
     initial_state: AgentState = {
         "requirement": requirement,
         "messages": [],
         "next_agent": None,
-        "complete": False,
+        "done": False,
         "iteration": 0,
     }
 
@@ -121,6 +162,7 @@ def _run_one_discussion(graph, requirement: str) -> AgentState:
     console.print(format_separator(f"讨论开始: {datetime.now().strftime('%H:%M:%S')}"))
     console.print()
 
+    # 初始 AgentState传入图。
     final_state: AgentState = initial_state
     for state in graph.stream(
         initial_state,
@@ -135,16 +177,16 @@ def _run_one_discussion(graph, requirement: str) -> AgentState:
     return final_state
 
 
-def _architect_review(state: AgentState) -> bool:
+def _next_round_or_not(state: AgentState) -> bool:
     """由人类架构师决定是否继续；返回 True 表示继续。"""
     msgs = state.get("messages") or []
-    n_turns = len(msgs)
-    complete = state.get("complete", False)
+    n_turns = len(msgs) # agent 发言的次数
+    done = state.get("done", False)
 
     console.print(
         Panel(
             f"本轮共 {n_turns} 次 agent 发言；"
-            + ("[bold green]架构师已宣布完成 ✅[/bold green]" if complete else "[yellow]架构师未宣布完成[/yellow]"),
+            + ("[bold green]架构师已宣布完成 ✅[/bold green]" if done else "[yellow]架构师未宣布完成[/yellow]"),
             title="[bold]架构师复盘[/bold]",
             border_style="magenta",
         )
@@ -167,7 +209,7 @@ def main() -> None:
     _print_banner()
     _bootstrap()
 
-    graph = build_agent_graph()
+    graph = build_graph()
 
     console.print(
         Panel.fit(
@@ -196,7 +238,7 @@ def main() -> None:
 
         final_state = _run_one_discussion(graph, requirement)
 
-        if not _architect_review(final_state):
+        if not _next_round_or_not(final_state):
             console.print("\n[bold]再见！[/bold]")
             return
 
