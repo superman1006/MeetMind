@@ -1,3 +1,3 @@
-a = 1
-b = 1
-print(f"{a}a+b")
+a = "11"
+b = str(a)
+print(b)

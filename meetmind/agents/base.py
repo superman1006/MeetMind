@@ -2,18 +2,16 @@
 
 from __future__ import annotations
 
-import re
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from dataclasses import dataclass
+import json
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage, BaseMessage
 from langchain_openai import ChatOpenAI
+from pydantic import BaseModel, Field
 
 from meetmind.config.constants import (
     AGENT_NAMES,
     ARCHITECT,
-    DONE_MARKER,
-    NEXT_AGENT_PATTERN,
     ROLE_DESCRIPTIONS,
 )
 from meetmind.config.settings import get_settings
@@ -32,6 +30,31 @@ def clean_bad_chars(text: str) -> str:
     if not text:
         return text
     return text.encode("utf-8", errors="replace").decode("utf-8", errors="replace")
+
+
+class ModelOutput(BaseModel):
+    """LLM 单轮回复的强约束 schema。
+
+    用 `model.with_structured_output(ModelOutput)` 让模型按这个 schema 生成结构化输出，
+    省掉以前用 `[NEXT_AGENT: …]` / `[DONE]` 自然语言标记 + 正则解析的脆弱方案。
+    """
+
+    content: str = Field(
+        description="给用户与其他 agent 看的正文。本字段才是真正展示出去的回复。"
+    )
+    next_agent: str = Field(
+        description=(
+            "下一个发言 agent 的名字，必须是 architect / backend / frontend / tester / pm 之一。"
+            "非架构师角色发言结束后通常应填 'architect'；架构师宣布完成时这里也填 'architect'（占位即可）。"
+        )
+    )
+    done: str = Field(
+        description=(
+            "本轮讨论是否完成。只允许两个字符串值："
+            "'true' —— 架构师认为整个用户需求已被处理完毕，本轮可以结束；"
+            "'false' —— 还需要继续讨论。非架构师角色一律填 'false'。"
+        )
+    )
 
 
 @dataclass
@@ -109,8 +132,9 @@ class BaseAgent(ABC):
     def _routing_prompt(self) -> str:
         """返回拼接到 system_prompt 末尾的路由指令文本。
 
-        告诉 LLM：回复最后必须用 `[NEXT_AGENT: xxx]` 或 `[DONE]` 单行标注，
-        以便 `_parse_routing()` 能把发言权稳定地交给下一个 agent。
+        现在不再要求 LLM 在自由文本里写 `[NEXT_AGENT: …]` / `[DONE]` 标记，
+        而是依赖 `with_structured_output(ModelOutput)` 让模型直接输出结构化 JSON。
+        本段提示词告诉 LLM **如何填 ModelOutput 的 next_agent / done 字段**。
         """
         peers_list = []
         for a in AGENT_NAMES:
@@ -118,48 +142,54 @@ class BaseAgent(ABC):
                 peers_list.append(a)
         peers = ", ".join(peers_list)
         return (
-            "\n\n=== 路由指令（非常重要） ===\n"
-            "你的回复必须在最后一行单独标注路由指令，格式严格如下之一：\n"
-            f"  [NEXT_AGENT: <agent_name>]   # 把发言权交给指定 agent，可选项: {peers}\n"
-            "  [DONE]                       # 架构师专用：用户需求已处理完毕，结束本轮讨论\n"
-            "其他 agent（非架构师）回复结束后默认应回到架构师：写 [NEXT_AGENT: architect]。\n"
-            "不要在标记的同一行写任何其他内容。\n\n"
+            "\n\n=== 输出字段填写指南（你的最终回复会被强制约束为 JSON）===\n"
+            "你的回复将被序列化为三字段对象 ModelOutput { content, next_agent, done }。\n"
+            f"  • content    : 给用户和其他 agent 看的正文，写在这里就行，不要再额外加 [NEXT_AGENT] / [DONE] 标记。\n"
+            f"  • next_agent : 下一个发言 agent 的名字。可选项: {peers}, {self.name}。\n"
+            f"                 非架构师角色发言结束后通常填 'architect'；\n"
+            f"                 架构师宣布完成时也填 'architect'（占位用）。\n"
+            f"  • done       : 字符串 'true' 或 'false'。\n"
+            f"                 仅架构师在整个用户需求都处理完时填 'true'，其它任何情况一律 'false'。\n\n"
             "=== 反循环硬规则（违反会让讨论卡到 max_iterations）===\n"
             "1. 严禁重复别人或自己之前说过的话：先扫一眼上面的「已有讨论历史」，\n"
             "   如果你打算说的内容已经有人说过类似的，要么补充新角度，要么不说。\n"
-            "2. 如果用户输入只是闲聊/打招呼/简单 Q&A，架构师应该自己一句话回完就 [DONE]，\n"
+            "2. 如果用户输入只是闲聊/打招呼/简单 Q&A，架构师应该自己一句话回完就把 done 设为 'true'，\n"
             "   不要无意义地路由到 pm / backend / frontend / tester。\n"
             "3. 如果你（非架构师）发现自己只能输出寒暄性回复、没有专业信息可补充，\n"
-            "   仍然要交回 architect（写 [NEXT_AGENT: architect]），由 architect 决定 [DONE]。\n"
+            "   仍然把 next_agent 填 'architect'，由架构师决定是否 done='true'。\n"
             "4. **反喧宾夺主**：如果用户输入里点名了具体角色（如「pm 查 X」「让 backend 做 Y」），\n"
             "   架构师【绝不能】自己先调用 rag_search_architect 等工具去做那件事，\n"
-            "   也不能自己代答；唯一动作是简短引导一句 + [NEXT_AGENT: <被点名的角色>]，\n"
-            "   让该角色用它自己的 RAG / 专业能力去完成。"
+            "   也不能自己代答；唯一动作是简短引导一句 + next_agent 填被点名的角色名。"
         )
 
     # ---------- 核心处理 ----------
 
     def invoke(self, requirement: str, conversation_history: str) -> AgentResponse:
-        """运行一次 Agent 推理：可选地调用 RAG 工具，最终返回 AgentResponse。
+        """运行一次 Agent 推理，分两个阶段调 LLM。
 
-        流程：
-          1. 清洗输入中的代理码点，避免 httpx 编码崩溃；
-          2. 构造 system / user 消息，把 RAG 检索器作为 LangChain Tool 绑定到 LLM；
-          3. 进入 tool_calls 循环：
-             - 调用 LLM；若返回里有 tool_calls，按 ID 执行对应工具，把结果包装成
-               ToolMessage 追加到消息列表，再继续下一轮；
-             - 若 LLM 不再要求调用工具，跳出循环，把它的 content 作为最终回复；
-          4. 用正则解析最终回复中的 `[NEXT_AGENT: …]` / `[DONE]` 路由标记。
+        这是 LangChain 官方推荐的「tools + structured output」组合模式。
+        `bind_tools` 和 `with_structured_output` 都依赖 function-calling 协议，
+        放在一次 invoke 里会让 LLM 在「该调工具还是该返回 schema」上犹豫，
+        对 OpenAI 兼容端点（如小米 mimo）不稳定，所以拆成两段：
+
+          Phase 1 —— 工具循环（只 bind_tools，不约束输出格式）
+            LLM 自主决定调不调 RAG；调了就执行、把结果包成 ToolMessage 接回；
+            直到 LLM 不再要工具，或循环达 _MAX_TOOL_ITERATIONS 上限。
+
+          Phase 2 —— 结构化收尾（只 with_structured_output，不再带工具）
+            在 messages 末尾追加一条 HumanMessage 明确要求按 ModelOutput 汇总，
+            直接拿到 ModelOutput 实例。
+
+        最后把 ModelOutput 三字段填进 AgentResponse（done 字符串转 bool）。
         """
 
-        # 1) clean_bad_chars 清理乱码
+        # 1) 清乱码
         requirement = clean_bad_chars(requirement)
         conversation_history = clean_bad_chars(conversation_history)
 
-        # 2) 准备 prompts + 绑定 RAG 工具到 LLM
+        # 2) 准备 prompts + RAG 工具
         self.RAGRetriever.restart()
         rag_tool = self.RAGRetriever.get_tool()
-        model_with_tools = self._model.bind_tools([rag_tool])
 
         user_prompt = clean_bad_chars(
             self._user_prompt(
@@ -168,37 +198,29 @@ class BaseAgent(ABC):
             )
         )
         system_prompt = clean_bad_chars(
-            # 两段文字: 1) 角色人设与指令；2) 路由指令（非常重要）
+            # 两段文字: 1) 角色人设与指令；2) 输出字段填写指南 + 反循环规则
             self.system_prompt + self._routing_prompt()
         )
 
-        messages: list = [
+        messages: list[BaseMessage] = [
             SystemMessage(content=system_prompt),
             HumanMessage(content=user_prompt),
         ]
 
-        # 3) tool_calls 循环：让 LLM 自主决定是否调用 RAG
-        final_text = ""
+        # ===== Phase 1：工具循环 =====
+        model_with_tools = self._model.bind_tools([rag_tool])
+
         try:
             for _ in range(_MAX_TOOL_ITERATIONS):
-                # 调用模型得到 AIMessage
                 ai_msg: AIMessage = model_with_tools.invoke(messages)
                 messages.append(ai_msg)
 
-                # 拿到所有 tool 的列表
-                # getattr 可以获取 ai_msg 中的 tool_calls 属性，没有则返回 []
-                tool_calls = getattr(ai_msg, "tool_calls", [])
-
-                # 当前轮没有 tool_calls 了 → 认为 LLM 的回答已经完成，跳出循环
+                tool_calls = getattr(ai_msg, "tool_calls", []) or []
                 if not tool_calls:
-                    # 模型调用完 tool_calls里面的工具后,整理 final_text准备路由解析
-                    if isinstance(ai_msg.content, str):
-                        final_text = ai_msg.content        # 本来就是字符串，直接用
-                    else:
-                        final_text = str(ai_msg.content)   # 不是字符串，强制转成字符串
+                    # LLM 不再调工具 → 退出循环进 Phase 2
                     break
 
-                # 执行每一个 tool_call，把结果追加为 ToolMessage
+                # 执行每个 tool_call，结果追加为 ToolMessage
                 for tc in tool_calls:
                     tool_name = tc.get("name", "")
                     tool_args = tc.get("args", {}) or {}
@@ -214,51 +236,69 @@ class BaseAgent(ABC):
                         ToolMessage(content=tool_result, tool_call_id=tool_id)
                     )
             else:
-                # 循环用尽仍在调用工具：fallback 让架构师接手
-                final_text = (
-                    "(工具调用次数已达上限，未能给出最终结论)\n"
-                    f"[NEXT_AGENT: {ARCHITECT}]"
+                # 循环用尽仍在调工具：仍进 Phase 2，让模型基于现有上下文给结构化总结
+                logger.warning(
+                    f"[{self.name}] 工具调用次数已达上限 ({_MAX_TOOL_ITERATIONS})，"
+                    "强制进入结构化收尾阶段"
                 )
         except Exception as exc:
-            logger.error(f"[{self.name}] LLM 调用失败: {exc}")
-            final_text = (
-                f"(LLM 调用失败: {exc})\n"
-                # 其他角色回答出错后默认回退给架构师
-                f"[NEXT_AGENT: {ARCHITECT}]"
+            # Phase 1 异常（API 超时 / 网络错误等）→ 直接构造 fallback，跳过 Phase 2
+            logger.error(f"[{self.name}] Phase 1 工具循环失败: {exc}")
+            fallback = ModelOutput(
+                content=f"(LLM 调用失败: {exc})",
+                next_agent=ARCHITECT,
+                done="false",
+            )
+            return self._build_agent_response(fallback)
+
+        # ===== Phase 2：结构化收尾 =====
+        # 给模型一个明确的"按 ModelOutput 输出"指令，避免它继续说自由文本
+        wrap_up_prompt = (
+            "以上是你（和工具）已经产出的全部上下文。"
+            "请基于以上信息，按 ModelOutput 三字段输出最终结果：\n"
+            "  • content    : 给团队看的正文（不要重复罗列上面已说过的话，给出最终结论 / 建议 / 行动项即可）\n"
+            "  • next_agent : 下一个发言 agent（architect / backend / frontend / tester / pm 之一）\n"
+            "  • done       : 'true' 或 'false'"
+        )
+        messages.append(HumanMessage(content=wrap_up_prompt))
+
+        structured_model = self._model.with_structured_output(ModelOutput)
+        try:
+            final_output: ModelOutput = structured_model.invoke(messages)
+        except Exception as exc:
+            logger.error(f"[{self.name}] Phase 2 结构化收尾失败: {exc}")
+            final_output = ModelOutput(
+                content=f"(结构化输出失败: {exc})",
+                next_agent=ARCHITECT,
+                done="false",
             )
 
-        # 4) 解析路由标记
-        output_role, done = self._get_next_agent(final_text)
+        return self._build_agent_response(final_output)
+
+    # ---------- 辅助方法 ----------
+
+    def _build_agent_response(self, output: ModelOutput) -> AgentResponse:
+        """把 ModelOutput 三字段规范化后填进 AgentResponse。
+
+        - done       : 字符串 → bool（'true' / 'yes' / '1' / 'done' / '完成' 都视为 True）
+        - next_agent : 小写化 + 不在 AGENT_NAMES 列表时兜底回 architect
+        - content    : 直接作为对外展示的 message
+        """
+        done_str = output.done.strip().lower()
+        is_done = done_str in {"true", "yes", "1", "y", "done", "完成"}
+
+        next_agent_name = output.next_agent.strip().lower()
+        if next_agent_name not in AGENT_NAMES:
+            logger.warning(
+                f"[{self.name}] next_agent='{next_agent_name}' 不在已知列表，兜底回 {ARCHITECT}"
+            )
+            next_agent_name = ARCHITECT
 
         return AgentResponse(
             agent_name=self.name,
             role=self.role,
-            message=final_text.strip(),
-            next_agent=output_role,
-            done=done,
+            message=output.content.strip(),
+            next_agent=next_agent_name,
+            done=is_done,
             used_rag=self.RAGRetriever.call_count > 0,
         )
-
-    # ---------- 辅助方法 ----------
-
-    @staticmethod
-    def _get_next_agent(text: str) -> tuple[str | None, bool]:
-        """从 LLM 回复中提取路由信号，返回 `(next_agent, done)`。
-        - 若文本含 `[DONE]` → 返回 `(None, True)`
-        - 否则按正则 `[NEXT_AGENT: name]` 提取下一发言人；若 name 不在
-          已知 agent 列表中或正则匹配失败，则兜底回到架构师，保证图不会卡死。
-        """
-
-        # `[DONE]` 是终止标记：理论上只有架构师会输出，命中即结束本轮
-        if DONE_MARKER in text:
-            return None, True
-
-        # 根据正则表达式寻找下一位发言的 agent
-        match = re.search(NEXT_AGENT_PATTERN, text)
-        if match:
-            next_agent = match.group(1).strip().lower()
-            if next_agent in AGENT_NAMES:
-                return next_agent, False
-
-        # 默认回退 — 交回架构师以保持图继续运行
-        return ARCHITECT, False
