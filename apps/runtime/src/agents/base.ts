@@ -27,6 +27,7 @@ import { getSettings } from "../config/settings.js";
 import { type RAGRetriever, getRetriever } from "../database/rag_retriever.js";
 import { getLogger } from "../utils/logger.js";
 import { cleanBadChars} from "../utils/utils.js";
+import { streamStructuredContent } from "./streamStructured.js";
 import { ToolRegister } from "../tools/toolRegistry.js";
 import {ragSearchTool} from "../tools/ragSearchTool.js";
 import {webSearchTool} from "../tools/webSearchTool.js";
@@ -179,6 +180,7 @@ export abstract class BaseAgent {
   async invoke(
     requirement: string,
     conversationHistory: string,
+    opts?: { onDelta?: (text: string) => void },
   ): Promise<AgentResponse> {
     // 1) 清乱码：去掉 stdin 来的孤立 surrogate
     const requirement_cleaned = cleanBadChars(requirement);
@@ -273,7 +275,18 @@ export abstract class BaseAgent {
 
     let finalOutput: ModelOutput;
     try {
-      finalOutput = await structuredModel.invoke(Allmessages);
+      if (opts?.onDelta) {
+        // 服务端路径:流式收尾,逐段吐 content 增量(真·token 打字机)
+        const partialStream = await structuredModel.stream(Allmessages);
+        const lastPartial = await streamStructuredContent<ModelOutput>(
+          partialStream as AsyncIterable<Partial<ModelOutput>>,
+          opts.onDelta,
+        );
+        finalOutput = lastPartial as ModelOutput;
+      } else {
+        // CLI 路径:一次拿完整结果,行为不变
+        finalOutput = await structuredModel.invoke(Allmessages);
+      }
     } catch (exc) {
       logger.error(`[${this.name}] Phase 2 结构化收尾失败: ${String(exc)}`);
       finalOutput = {
