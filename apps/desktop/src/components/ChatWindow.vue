@@ -91,6 +91,15 @@ async function onSend(text: string): Promise<void> {
     chat.addErrorBubble(props.sessionId, String(e));
   }
 }
+
+// 打断当前讨论:后端 abort 本轮 → 推 round_done(interrupted) → finishRound 清 busy → 可重新输入。
+async function onInterrupt(): Promise<void> {
+  try {
+    await rpc("chat.interrupt", { sessionId: props.sessionId });
+  } catch (e) {
+    chat.addErrorBubble(props.sessionId, String(e));
+  }
+}
 </script>
 
 <template>
@@ -104,7 +113,7 @@ async function onSend(text: string): Promise<void> {
         </div>
       </div>
     </div>
-    <Composer :disabled="busy" @send="onSend" />
+    <Composer :busy="busy" @send="onSend" @interrupt="onInterrupt" />
   </section>
 </template>
 

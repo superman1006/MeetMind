@@ -77,6 +77,8 @@ export interface AgentResponse {
   next_agent: string | null;
   done: boolean;
   used_rag: boolean;
+  // 本轮用过的工具名(去重、", "连接);没用工具则为空串/缺省。用于前端常驻 UsingTools 标签。
+  tool?: string;
 }
 
 export abstract class BaseAgent {

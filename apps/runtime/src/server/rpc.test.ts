@@ -17,6 +17,7 @@ const fakeGraph = {
 describe("handleRpc", () => {
   beforeEach(() => {
     sessions.setBusy("s1", false);
+    sessions.clearController("s1");
     // 把所有 DB 调用打桩,避免单测连真库
     vi.spyOn(chatStore, "getMessages").mockResolvedValue([]);
     vi.spyOn(chatStore, "appendMessages").mockResolvedValue(undefined);
@@ -29,6 +30,7 @@ describe("handleRpc", () => {
       { id: "a", title: "会话A", created_at: "2026-06-01T00:00:00Z" },
     ]);
     vi.spyOn(chatStore, "deleteSession").mockResolvedValue(undefined);
+    vi.spyOn(chatStore, "renameSession").mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -116,6 +118,60 @@ describe("handleRpc", () => {
       params: { sessionId: "s1" },
     })) as { error?: { code: number } };
     expect(res.error?.code).toBe(-32000);
+  });
+
+  it("chat.interrupt abort 掉该会话进行中的 controller", async () => {
+    const controller = new AbortController();
+    sessions.setController("s1", controller);
+    const res = await handleRpc(fakeGraph, {
+      jsonrpc: "2.0",
+      id: 10,
+      method: "chat.interrupt",
+      params: { sessionId: "s1" },
+    });
+    expect(res).toMatchObject({ result: { ok: true } });
+    expect(controller.signal.aborted).toBe(true);
+  });
+
+  it("chat.interrupt 无进行中讨论也返回 ok(幂等)", async () => {
+    const res = await handleRpc(fakeGraph, {
+      jsonrpc: "2.0",
+      id: 11,
+      method: "chat.interrupt",
+      params: { sessionId: "s1" },
+    });
+    expect(res).toMatchObject({ result: { ok: true } });
+  });
+
+  it("chat.interrupt 缺 sessionId 返回 -32602", async () => {
+    const res = (await handleRpc(fakeGraph, {
+      jsonrpc: "2.0",
+      id: 12,
+      method: "chat.interrupt",
+      params: {},
+    })) as { error?: { code: number } };
+    expect(res.error?.code).toBe(-32602);
+  });
+
+  it("session.rename 成功返回 ok 并 trim 标题", async () => {
+    const res = await handleRpc(fakeGraph, {
+      jsonrpc: "2.0",
+      id: 13,
+      method: "session.rename",
+      params: { sessionId: "s1", title: "  新名字  " },
+    });
+    expect(res).toMatchObject({ result: { ok: true } });
+    expect(chatStore.renameSession).toHaveBeenCalledWith("s1", "新名字");
+  });
+
+  it("session.rename 空标题返回 -32602", async () => {
+    const res = (await handleRpc(fakeGraph, {
+      jsonrpc: "2.0",
+      id: 14,
+      method: "session.rename",
+      params: { sessionId: "s1", title: "   " },
+    })) as { error?: { code: number } };
+    expect(res.error?.code).toBe(-32602);
   });
 
   it("未知方法返回 -32601", async () => {

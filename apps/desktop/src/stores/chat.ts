@@ -8,8 +8,7 @@ export interface Bubble {
   isUser: boolean;
   done: boolean;
   used_rag: boolean;
-  usingTools: boolean;  // 正在调工具(Phase 1),显示 UsingTools 标签
-  tool: string;         // 当前/最近调用的工具名
+  tool: string;  // 本轮用过的工具名(非空即一直显示 "UsingTools: <tool>",回答结束也保留)
 }
 
 /** 从 DB 取回的一条历史消息(AgentResponse 的子集),用于 load 时还原气泡。 */
@@ -20,6 +19,7 @@ export interface StoredTurn {
   next_agent: string | null;
   done: boolean;
   used_rag: boolean;
+  tool: string;
 }
 
 interface ChatState {
@@ -53,7 +53,6 @@ export const useChatStore = defineStore("chat", {
         isUser: true,
         done: false,
         used_rag: false,
-        usingTools: false,
         tool: "",
       });
       this.busyBySession[sessionId] = true;
@@ -68,7 +67,6 @@ export const useChatStore = defineStore("chat", {
         isUser: false,
         done: false,
         used_rag: false,
-        usingTools: false,
         tool: "",
       });
     },
@@ -76,8 +74,13 @@ export const useChatStore = defineStore("chat", {
       const bubbles = this.bubblesBySession[sessionId] ?? [];
       for (let i = bubbles.length - 1; i >= 0; i--) {
         if (bubbles[i].turnId === turnId) {
-          bubbles[i].usingTools = true;
-          bubbles[i].tool = tool;
+          // 累加显示用过的工具(去重),回答结束也不清除
+          const existing = bubbles[i].tool;
+          if (!existing) {
+            bubbles[i].tool = tool;
+          } else if (!existing.split(", ").includes(tool)) {
+            bubbles[i].tool = `${existing}, ${tool}`;
+          }
           return;
         }
       }
@@ -87,8 +90,6 @@ export const useChatStore = defineStore("chat", {
       for (let i = bubbles.length - 1; i >= 0; i--) {
         if (bubbles[i].turnId === turnId) {
           bubbles[i].text += text;
-          // 开始吐字 = 工具已用完,撤掉 UsingTools 标签
-          bubbles[i].usingTools = false;
           return;
         }
       }
@@ -98,7 +99,6 @@ export const useChatStore = defineStore("chat", {
       for (let i = bubbles.length - 1; i >= 0; i--) {
         if (bubbles[i].turnId === turnId) {
           bubbles[i].used_rag = usedRag;
-          bubbles[i].usingTools = false;
           return;
         }
       }
@@ -119,8 +119,7 @@ export const useChatStore = defineStore("chat", {
           isUser: t.agent_name === "user",
           done: t.done,
           used_rag: t.used_rag,
-          usingTools: false,
-          tool: "",
+          tool: t.tool ?? "",
         });
       }
       this.bubblesBySession[sessionId] = bubbles;
@@ -140,7 +139,6 @@ export const useChatStore = defineStore("chat", {
         isUser: false,
         done: false,
         used_rag: false,
-        usingTools: false,
         tool: "",
       });
       this.busyBySession[sessionId] = false;

@@ -28,6 +28,20 @@ export const useSessionsStore = defineStore("sessions", {
     select(id: string): void {
       this.activeId = id;
     },
+    /** 重命名会话:服务端改 title,本地列表同步更新。 */
+    async rename(id: string, title: string): Promise<void> {
+      const trimmed = title.trim();
+      if (!trimmed) {
+        return;
+      }
+      await rpc("session.rename", { sessionId: id, title: trimmed });
+      for (const s of this.list) {
+        if (s.id === id) {
+          s.title = trimmed;
+          return;
+        }
+      }
+    },
     /** 删除会话(服务端级联删消息),并从列表移除;删的是当前会话则切到另一个。 */
     async remove(id: string): Promise<void> {
       await rpc("session.delete", { sessionId: id });

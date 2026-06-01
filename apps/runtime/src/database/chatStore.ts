@@ -59,9 +59,13 @@ export async function ensureChatTables(): Promise<void> {
     `  next_agent TEXT,` +
     `  done BOOLEAN NOT NULL DEFAULT false,` +
     `  used_rag BOOLEAN NOT NULL DEFAULT false,` +
+    `  tool TEXT NOT NULL DEFAULT '',` +
     `  created_at TIMESTAMPTZ NOT NULL DEFAULT now()` +
     `)`;
   await pool.query(createMessagesSql);
+
+  // 兼容旧表:tool 列可能不存在,补上(幂等)
+  await pool.query(`ALTER TABLE ${messages} ADD COLUMN IF NOT EXISTS tool TEXT NOT NULL DEFAULT ''`);
 
   // 按会话取历史时按 (session_id, seq) 排序，建个联合索引
   const indexSql =
@@ -100,7 +104,7 @@ export async function listSessions(): Promise<SessionMeta[]> {
 export async function getMessages(sessionId: string): Promise<AgentResponse[]> {
   const pool = getPgPool();
   const selectSql =
-    `SELECT agent_name, role, message, next_agent, done, used_rag ` +
+    `SELECT agent_name, role, message, next_agent, done, used_rag, tool ` +
     `FROM ${messagesTable()} WHERE session_id = $1 ORDER BY seq ASC`;
   const result = await pool.query(selectSql, [sessionId]);
   const turns: AgentResponse[] = [];
@@ -112,6 +116,7 @@ export async function getMessages(sessionId: string): Promise<AgentResponse[]> {
       next_agent: row.next_agent,
       done: row.done,
       used_rag: row.used_rag,
+      tool: row.tool ?? "",
     });
   }
   return turns;
@@ -135,8 +140,8 @@ export async function appendMessages(
 
   const insertSql =
     `INSERT INTO ${messages} ` +
-    `(session_id, seq, agent_name, role, message, next_agent, done, used_rag) ` +
-    `VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`;
+    `(session_id, seq, agent_name, role, message, next_agent, done, used_rag, tool) ` +
+    `VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`;
   for (const turn of turns) {
     await pool.query(insertSql, [
       sessionId,
@@ -147,9 +152,17 @@ export async function appendMessages(
       turn.next_agent,
       turn.done,
       turn.used_rag,
+      turn.tool ?? "",
     ]);
     nextSeq += 1;
   }
+}
+
+/** 重命名某会话(只改 title)。未知 id 时不报错(影响 0 行)。 */
+export async function renameSession(sessionId: string, title: string): Promise<void> {
+  const pool = getPgPool();
+  const updateSql = `UPDATE ${sessionsTable()} SET title = $2 WHERE id = $1`;
+  await pool.query(updateSql, [sessionId, title]);
 }
 
 /** 删除某会话；它的 messages 靠外键 ON DELETE CASCADE 一并删除。 */

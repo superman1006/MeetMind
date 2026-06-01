@@ -20,6 +20,7 @@ export async function runDiscussion(
   graph: CompiledGraph,
   sessionId: string,
   requirement: string,
+  signal?: AbortSignal,
 ): Promise<void> {
   // 把本轮用户输入记进历史(agent_name=user),复刻 CLI 的做法
   const userTurn: AgentResponse = {
@@ -46,9 +47,11 @@ export async function runDiscussion(
     };
 
     let finalState: AgentState = initialState;
+    // signal 透传给 graph.stream:chat.interrupt abort() 后,LLM 请求 + 图迭代会被中止。
     const stream = await graph.stream(initialState, {
       recursionLimit: 50,
       streamMode: ["custom", "values"],
+      signal,
     });
 
     for await (const item of stream) {
@@ -61,6 +64,13 @@ export async function runDiscussion(
       }
     }
 
+    // 被打断:丢弃本轮(不落库,保留上一轮记忆),发 round_done 让前端恢复输入。
+    if (signal?.aborted) {
+      logger.info(`[runDiscussion] 会话 ${sessionId} 被用户打断,本轮不落库`);
+      sse.send(sessionId, "round_done", { done: false, interrupted: true });
+      return;
+    }
+
     // 本轮新增的 turn = 最终 messages 超出 seed(=prior+userTurn 之前的 prior)的尾部,
     // 即 userTurn + 各 agent 回复;增量落库,不重写整段。
     const finalMessages = finalState.messages ?? seedMessages;
@@ -68,6 +78,12 @@ export async function runDiscussion(
     await chatStore.appendMessages(sessionId, newTurns);
     sse.send(sessionId, "round_done", { done: finalState.done ?? false });
   } catch (exc) {
+    // abort 会让 graph.stream 抛错:这是预期的打断,不当成错误,丢弃本轮、发 round_done。
+    if (signal?.aborted) {
+      logger.info(`[runDiscussion] 会话 ${sessionId} 被用户打断(stream 抛出),本轮不落库`);
+      sse.send(sessionId, "round_done", { done: false, interrupted: true });
+      return;
+    }
     logger.error(`[runDiscussion] 会话 ${sessionId} 出错: ${String(exc)}`);
     sse.send(sessionId, "error", { message: String(exc) });
   }

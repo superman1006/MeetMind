@@ -79,12 +79,16 @@ function createNode(agent: BaseAgent) {
 
     let onDelta: ((text: string) => void) | undefined = undefined;
     let onToolUse: ((toolName: string) => void) | undefined = undefined;
+    const toolsUsed: string[] = []; // 本轮用过的工具名(去重),用于落库 + 前端常驻标签
     if (writer) {
       onDelta = (text: string) => {
         writer({ kind: "delta", turnId, text });
       };
       onToolUse = (toolName: string) => {
         writer({ kind: "using_tools", turnId, tool: toolName });
+        if (!toolsUsed.includes(toolName)) {
+          toolsUsed.push(toolName);
+        }
       };
     }
 
@@ -93,6 +97,11 @@ function createNode(agent: BaseAgent) {
       response = await agent.invoke(requirement, history, { onDelta, onToolUse });
     } else {
       response = await agent.invoke(requirement, history);
+    }
+
+    // 把本轮用过的工具名挂到 response,随消息落库;前端据此常驻 "UsingTools: <工具名>"
+    if (toolsUsed.length > 0) {
+      response.tool = toolsUsed.join(", ");
     }
 
     printAgentInfo({
