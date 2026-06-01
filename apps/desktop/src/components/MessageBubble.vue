@@ -2,9 +2,13 @@
 import { computed } from "vue";
 import type { Bubble } from "../stores/chat.js";
 import { agentColor } from "../theme/agentColors.js";
+import TypingDots from "./TypingDots.vue";
 
 const props = defineProps<{ bubble: Bubble }>();
 const color = computed(() => agentColor(props.bubble.agent_name));
+
+// agent 气泡已建但还没吐出任何 content(Phase 1 工具循环中)→ 显示流动点,表示思考中
+const thinking = computed(() => !props.bubble.isUser && props.bubble.text.length === 0);
 </script>
 
 <template>
@@ -14,7 +18,8 @@ const color = computed(() => agentColor(props.bubble.agent_name));
         <span class="role">{{ bubble.role || color.label }}</span>
         <span v-if="bubble.used_rag" class="rag">RAG</span>
       </div>
-      <div class="text">{{ bubble.text }}</div>
+      <TypingDots v-if="thinking" />
+      <div v-else class="text">{{ bubble.text }}</div>
     </div>
   </div>
 </template>
