@@ -8,11 +8,9 @@
  *   4) 本地 cross-encoder rerank
  *   5) 取 rerank 后的 top-K 给 LLM
  *
- * 用 `getTool()` 把检索器暴露成 LangChain Tool，LLM 用 function-calling 按需调用。
+ * 检索逻辑（混合检索 + rerank）在 `retrieve()` 里；把它包成 LangChain Tool 的工厂
+ * 见 `src/tools/ragSearchTool.ts`。
  */
-
-import { tool } from "@langchain/core/tools";
-import { z } from "zod";
 
 import { getSettings } from "../config/settings.js";
 import { getLogger } from "../utils/logger.js";
@@ -31,15 +29,6 @@ export interface RetrievedDoc {
   relevanceScore: number;
 }
 
-function asContextLine(doc: RetrievedDoc): string {
-  const tag = (doc.metadata?.type as string | undefined) ?? "note";
-  const date = (doc.metadata?.date as string | undefined) ?? "";
-  if (date) {
-    return `- [${tag} / ${date}] ${doc.content}`;
-  }
-  return `- [${tag}] ${doc.content}`;
-}
-
 interface DbRow {
   id: string;
   content: string;
@@ -53,6 +42,7 @@ export class RAGRetriever {
   callCount: number = 0;
   private _tableName: string | null = null;
 
+  /** 绑定该检索器到指定 agent，表名由 getTableName(agentName) 决定。 */
   constructor(agentName: string) {
     this.agentName = agentName;
   }
@@ -64,6 +54,7 @@ export class RAGRetriever {
     this.callCount = 0;
   }
 
+  /** 懒加载本 agent 对应的表名；首次会触发建表（含扩展 / 索引）。 */
   private async getTableName(): Promise<string> {
     if (this._tableName === null) {
       this._tableName = await ensureAgentTable(this.agentName);
@@ -116,6 +107,7 @@ export class RAGRetriever {
     }
   }
 
+  /** 关键字与向量两路命中按行 id 取并集；关键字结果优先排前，向量结果补在后。 */
   private merge(bm25Hits: DbRow[], knnHits: DbRow[]): DbRow[] {
     const seen = new Set<string>();
     const merged: DbRow[] = [];
@@ -182,36 +174,19 @@ export class RAGRetriever {
     }
     return result;
   }
+}
 
-  /**
-   * 把 retrieve 封装成 LangChain Tool，供 LLM function-calling 调用。
-   */
-  getTool() {
-    const description =
-      `检索 ${this.agentName} 的私有知识库（工作日志 / 代码片段 / 设计文档）。` +
-      "当你认为当前问题可能与历史经验、既有约定、过往实现相关时调用本工具；" +
-      "若问题与本角色的历史经验无关，可不调用。" +
-      "参数 query：自然语言查询字符串。";
+// 每个 agent 一个 RAGRetriever，按 agent 名缓存复用。
+// BaseAgent 和 rag_search 工具都通过 getRetriever 拿同一个实例，
+// 这样工具里的检索调用次数能被 agent 的 used_rag 统计（callCount）感知到。
+const _retrievers = new Map<string, RAGRetriever>();
 
-    return tool(
-      async ({ query }: { query: string }) => {
-        const docs = await this.retrieve(query);
-        if (docs.length === 0) {
-          return "(知识库中未找到相关条目)";
-        }
-        const lines: string[] = [];
-        for (const d of docs) {
-          lines.push(asContextLine(d));
-        }
-        return lines.join("\n");
-      },
-      {
-        name: `rag_search_${this.agentName}`,
-        description,
-        schema: z.object({
-          query: z.string().describe("自然语言查询字符串"),
-        }),
-      },
-    );
+/** 取（必要时新建）某 agent 的 RAGRetriever 单例。 */
+export function getRetriever(agentName: string): RAGRetriever {
+  let retriever = _retrievers.get(agentName);
+  if (retriever === undefined) {
+    retriever = new RAGRetriever(agentName);
+    _retrievers.set(agentName, retriever);
   }
+  return retriever;
 }

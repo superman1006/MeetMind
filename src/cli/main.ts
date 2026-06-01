@@ -15,7 +15,7 @@ import { createInterface } from "node:readline/promises";
 import chalk from "chalk";
 import ora from "ora";
 
-import { AGENT_NAMES, ROLE_DESCRIPTIONS } from "../config/constants.js";
+import { AGENT_NAMES, ARCHITECT, ROLE_DESCRIPTIONS } from "../config/constants.js";
 import { getSettings } from "../config/settings.js";
 import {
   countDocs,
@@ -23,14 +23,16 @@ import {
 } from "../database/client.js";
 import { getEmbedderModel } from "../database/embedding.js";
 import { buildAgentsIndices } from "../database/initializer.js";
+import type { AgentResponse } from "../agents/base.js";
 import { buildGraph } from "../graph/builder.js";
-import type { AgentState, MessageTurn } from "../graph/state.js";
+import type { AgentState } from "../graph/state.js";
 import {
   formatSeparator,
+  pathExists,
   printBanner,
   printMessagesTable,
   printSystem,
-} from "../utils/formatting.js";
+} from "../utils/utils.js";
 import { getLogger, setupLogging } from "../utils/logger.js";
 
 const logger = getLogger("cli");
@@ -49,15 +51,6 @@ function printAppBanner(): void {
     console.log(`  • ${chalk.bold(roleId.padEnd(10))} - ${desc}`);
   }
   console.log();
-}
-
-async function pathExists(p: string): Promise<boolean> {
-  try {
-    await stat(p);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 async function bootstrap(): Promise<void> {
@@ -175,15 +168,19 @@ async function bootstrap(): Promise<void> {
   }
 }
 
-async function runOneDiscussion(
-  graph: ReturnType<typeof buildGraph>,
-  requirement: string,
+async function runExecution(
+    graph: ReturnType<typeof buildGraph>, //graph 的类型是 buildGraph() 的返回值类型，也就是编译后的 graph 实例
+    currentRequirement: string,
+    priorMessages: AgentResponse[], // 跨轮记忆：上一轮累计的全部发言，作为本轮 messages 的起点
 ): Promise<AgentState> {
   const initialState: AgentState = {
-    requirement,
-    messages: [],
+    requirement: currentRequirement,
+    // 带入历史轮的 messages，concat reducer 会在其上继续追加本轮发言，
+    // 于是 agent 的 history 里能看到之前所有讨论，最终展示也是全量。
+    messages: priorMessages,
     next_agent: null,
     done: false,
+    // iteration 每轮从 0 重置：安全阀针对「本轮」计数，不受历史轮影响
     iteration: 0,
   };
 
@@ -209,16 +206,15 @@ async function runOneDiscussion(
   return finalState;
 }
 
-function printRoundReview(state: AgentState): void {
-  const msgs = state.messages ?? [];
-  const nTurns = msgs.length;
+function printRoundReview(state: AgentState, roundTurns: number): void {
+  // messages 现在是跨轮累计的，所以「本轮发言数」要用增量 roundTurns，不能直接取 length
   const done = state.done ?? false;
   const doneText = done
     ? chalk.bold.green("架构师已宣布完成")
     : chalk.yellow("架构师未宣布完成");
 
   console.log(
-    `\n${chalk.bold("[架构师复盘]")}  本轮共 ${nTurns} 次 agent 发言；${doneText}`,
+    `\n${chalk.bold("[架构师复盘]")}  本轮共 ${roundTurns} 次 agent 发言；${doneText}`,
   );
 }
 
@@ -233,7 +229,7 @@ function printFinalState(state: AgentState | null): void {
     return;
   }
 
-  const rows = messages.map((m: MessageTurn, i: number) => {
+  const rows = messages.map((m: AgentResponse, i: number) => {
     const flat = (m.message ?? "").replace(/\n/g, " ");
     const preview = flat.length > 80 ? flat.slice(0, 80) + "..." : flat;
     return {
@@ -261,6 +257,7 @@ export async function main(): Promise<void> {
       "3. 架构师 agent 把 done 设为 true 后本轮结束，由你决定继续或退出。",
   );
 
+  // 创建一个 readline,用来读取输入然后输出,只有在 CLI才会用到,实际开发中用  HTTP 输入请求 + SSE 输出响应 !!!!
   const rl = createInterface({ input: process.stdin, output: process.stdout });
 
   let lastState: AgentState | null = null;
@@ -271,6 +268,7 @@ export async function main(): Promise<void> {
       console.log(chalk.bold.magenta("架构师，请输入项目需求 (输入 'quit' 退出):"));
       let requirement: string;
       try {
+        // 用 rl.question 让用户控制台输入需求，trim 去掉首尾空白
         requirement = (await rl.question("> ")).trim();
       } catch {
         console.log(chalk.bold("\n再见！"));
@@ -278,24 +276,42 @@ export async function main(): Promise<void> {
         return;
       }
 
+      // 用户输入为空则继续
       if (!requirement) {
         continue;
       }
+
       // quit / exit / q 退出主循环
-      const low = requirement.toLowerCase();
+      const low = requirement.toLowerCase(); // 转小写
       if (low === "quit" || low === "exit" || low === "q") {
         console.log(chalk.bold("\n再见！"));
         printFinalState(lastState);
         return;
       }
 
-      const finalState = await runOneDiscussion(graph, requirement);
-      lastState = finalState;
+      // 把本轮用户输入也作为一条 message 记进历史（agent_name=user），
+      // 这样最终展示和 agent 的 history 里都能看到「用户提了什么」，而不只是 5 个 agent 的回复
+      const userTurn: AgentResponse = {
+        agent_name: "user",
+        role: "用户",
+        message: requirement,
+        next_agent: ARCHITECT, // 用户之后由架构师接手
+        done: false, // 用户这条不是完成信号
+        used_rag: false, // 用户输入不涉及 RAG
+      };
 
-      printRoundReview(finalState);
+      // 上一轮累计的 messages + 本轮用户输入，一起作为本轮起点（跨轮记忆）；首轮 prior 为空
+      const priorMessages = lastState?.messages ?? [];
+      const seedMessages = [...priorMessages, userTurn];
+      const currentState = await runExecution(graph, requirement, seedMessages);
+      lastState = currentState;
+
+      // 本轮新增 agent 发言数 = 累计 - 起点（起点已含用户那条），故不会把 user 算进去
+      const roundTurns = (currentState.messages?.length ?? 0) - seedMessages.length;
+      printRoundReview(currentState, roundTurns);
     }
   } finally {
-    rl.close();
+    rl.close(); // 释放 readline
     logger.debug("CLI 主循环结束");
   }
 }

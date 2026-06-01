@@ -6,10 +6,12 @@ import { FRONTEND } from "../config/constants.js";
 import { BaseAgent } from "./base.js";
 
 export class FrontendAgent extends BaseAgent {
+  /** 构造前端 Agent。 */
   constructor() {
     super(FRONTEND, "前端工程师");
   }
 
+  /** 前端人设：页面结构、组件拆分、交互流程、接口契约对齐。 */
   get systemPrompt(): string {
     return (
       "你是项目的前端工程师。核心职责是设计页面结构、组件拆分和交互流程，评估 UI/UX 可用性、可访问性和响应式适配，与后端确认接口契约（字段、loading 与错误处理、空状态），给出粗略的实现思路与工时预估。\n" +

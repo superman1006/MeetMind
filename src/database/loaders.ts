@@ -23,6 +23,7 @@ export interface RawDoc {
 
 // ---------- JSON ----------
 
+/** 读 JSON 数组：每个含 content 字段的对象转成一条 RawDoc，其余字段透传为 metadata。 */
 export async function loadJson(filePath: string): Promise<RawDoc[]> {
   const raw = await readFile(filePath, "utf-8");
   let parsed: unknown;
@@ -65,6 +66,7 @@ export async function loadJson(filePath: string): Promise<RawDoc[]> {
 
 // ---------- Markdown ----------
 
+/** 读 Markdown：按 `## ` 二级标题切块，没有标题时退化为按空行分段。 */
 export async function loadMarkdown(filePath: string): Promise<RawDoc[]> {
   const text = await readFile(filePath, "utf-8");
   const baseName = path.basename(filePath);
@@ -113,6 +115,7 @@ export async function loadMarkdown(filePath: string): Promise<RawDoc[]> {
 
 // ---------- PDF ----------
 
+/** 读 PDF：用 pdfjs-dist 逐页抽 text，每页一条 RawDoc，source 标 `file#pageN`。 */
 export async function loadPdf(filePath: string): Promise<RawDoc[]> {
   // pdfjs-dist 4.x 默认入口就是 build/pdf.mjs（ESM）
   const pdfjs = await import("pdfjs-dist");
@@ -154,6 +157,7 @@ export async function loadPdf(filePath: string): Promise<RawDoc[]> {
 
 // ---------- DOCX ----------
 
+/** 读 Word(.docx)：mammoth 抽纯文本后按段落（空行）切，每段一条 RawDoc。 */
 export async function loadDocx(filePath: string): Promise<RawDoc[]> {
   const mammoth = await import("mammoth");
   const buffer = await readFile(filePath);
@@ -174,6 +178,7 @@ export async function loadDocx(filePath: string): Promise<RawDoc[]> {
 
 // ---------- 纯文本 ----------
 
+/** 读纯文本：按空行分段，每段一条 RawDoc。 */
 export async function loadText(filePath: string): Promise<RawDoc[]> {
   const text = await readFile(filePath, "utf-8");
   const baseName = path.basename(filePath);
@@ -191,6 +196,7 @@ export async function loadText(filePath: string): Promise<RawDoc[]> {
 
 type LoaderFn = (filePath: string) => Promise<RawDoc[]>;
 
+// 一个 string 对应一个 function
 const LOADERS: Record<string, LoaderFn> = {
   ".json": loadJson,
   ".md": loadMarkdown,
@@ -204,6 +210,7 @@ const LOADERS: Record<string, LoaderFn> = {
  * 根据文件扩展名分发到对应 loader。每个 RawDoc 至少有 `content`。
  */
 export async function loadFile(filePath: string): Promise<RawDoc[]> {
+  // 读取文件前先根据扩展名选 loader
   const ext = path.extname(filePath).toLowerCase();
   const loader = LOADERS[ext];
   if (!loader) {

@@ -325,7 +325,7 @@ getSettings()                          # src/config/settings.ts
 | `src/database/loaders.ts` | loadFile() —— 按扩展名分发到各格式 loader |
 | `src/database/splitters.ts` | splitDocs() —— 按 doc.type 切块 |
 | `src/database/rag_retriever.ts` | RAGRetriever —— ES BM25 + ES kNN 并行检索 + 本地 rerank；getTool() 暴露成 LangChain Tool |
-| `src/utils/formatting.ts` | printAgentInfo() / printBanner() / printMessagesTable() —— chalk + boxen + cli-table3 美化输出 |
+| `src/utils/utils.ts` | printAgentInfo() / printBanner() / printMessagesTable() —— chalk + boxen + cli-table3 美化输出 |
 | `src/utils/logger.ts` | getLogger() / setupLogging() |
 | `data/seed/<agent>/` | 各 agent 的种子文件目录（json / pdf / docx / md / txt） |
 | `models/` | 本地模型缓存（embedding + reranker 的 ONNX 权重下载到这里） |

@@ -6,10 +6,12 @@ import { BACKEND } from "../config/constants.js";
 import { BaseAgent } from "./base.js";
 
 export class BackendAgent extends BaseAgent {
+  /** 构造后端 Agent。 */
   constructor() {
     super(BACKEND, "后端工程师");
   }
 
+  /** 后端人设：API 设计、数据建模、性能 / 安全评估、工时预估。 */
   get systemPrompt(): string {
     return (
       "你是项目的后端工程师。核心职责是设计或评估 API 接口（路径、入参、返回结构、错误码），设计数据模型与数据库 schema、索引和迁移策略，评估性能、并发、安全（鉴权、注入、限流）风险，给出粗略的实现思路与工时预估。\n" +

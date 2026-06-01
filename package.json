@@ -20,6 +20,7 @@
     "@langchain/langgraph": "^0.2.0",
     "@langchain/openai": "^0.3.0",
     "@langchain/textsplitters": "^0.1.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "boxen": "^8.0.1",
     "chalk": "^5.3.0",
     "cli-table3": "^0.6.5",

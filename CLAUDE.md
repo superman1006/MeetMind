@@ -47,7 +47,7 @@ src/index.ts (load dotenv) → cli/main.ts:main() → [printAppBanner / bootstra
 
 ### 三层职责分离
 
-1. **`src/agents/`** — 角色定义。子类只重写 `get systemPrompt()`，公共能力都在 `BaseAgent` 里。`BaseAgent.invoke()` 是核心，**分两阶段**：(0) 用 `cleanBadChars` 清掉 stdin 来的孤立 surrogate 码点；(1) **Phase 1 工具循环** —— `bindTools([ragTool])` 让 LLM 自主调 RAG，最多 `_MAX_TOOL_ITERATIONS=5` 轮；(2) **Phase 2 结构化收尾** —— `withStructuredOutput(ModelOutputSchema)` 强制 LLM 输出 `{content, next_agent, done}` 三字段，`_buildAgentResponse` 把 `done` 字符串 coerce 成 bool、校验 `next_agent` 合法性。
+1. **`src/agents/`** — 角色定义。子类只重写 `get systemPrompt()`，公共能力都在 `BaseAgent` 里。`BaseAgent` **在构造阶段**就 `bindTools(allTools)`（`allTools` 来自 `src/tools/toolRegistry.ts`，是一组工具单例）存进 `this._modelWithTools`，不在每轮 invoke 里反复 bindTools。`BaseAgent.invoke()` 是核心，**分两阶段**：(0) 用 `cleanBadChars` 清掉 stdin 来的孤立 surrogate 码点；(1) **Phase 1 工具循环** —— 复用 `this._modelWithTools` 让 LLM 自主调工具，最多 `_MAX_TOOL_ITERATIONS` 轮，按 tool_call 名字在 `allTools` 里找到工具执行（执行时通过 `config.configurable.agentName` 把自己的名字传给工具）；(2) **Phase 2 结构化收尾** —— `withStructuredOutput(ModelOutputSchema)` 强制 LLM 输出 `{content, next_agent, done}` 三字段，`_buildAgentResponse` 把 `done` 字符串 coerce 成 bool、校验 `next_agent` 合法性。
 
 2. **`src/graph/`** — LangGraph 编排。`AgentStateAnnotation`（`Annotation.Root`）是共享状态（`messages` 用 `concat` reducer 追加、其他字段用 `(_e,u)=>u` 覆盖）；`routeToWhichAgent` 是所有节点共用的条件边函数，按 `iteration >= maxIterations` → `state.done` → `isAgentName(state.next_agent)` → `architect_node` 兜底的顺序决定下一节点。
 
@@ -56,8 +56,11 @@ src/index.ts (load dotenv) → cli/main.ts:main() → [printAppBanner / bootstra
 ### 关键设计点
 
 - **路由协议从字符串标记改为结构化输出**：旧版本 Agent 在回复末尾写 `[NEXT_AGENT: name]` / `[DONE]` 再用正则解析；现在改为 zod `ModelOutputSchema = { content, next_agent, done }` + `withStructuredOutput`。已**没有** `_get_next_agent` 正则函数，解析与兜底都在 `_buildAgentResponse`：`done` 接受 `"true"/"yes"/"1"/"y"/"done"/"完成"` 视为真，`next_agent` 不在 `AGENT_NAMES` 里时兜底回 architect，保证图永远不卡死。
-- **invoke 是两阶段（先工具、后收尾）**：Phase 1 只 `bindTools`、不约束格式，让 LLM 自由调 RAG；Phase 2 只 `withStructuredOutput`、不带工具，追加一条 wrap-up 的 `HumanMessage` 要求按 `ModelOutput` 汇总。两阶段分开是因为「边调工具边强制结构化」在很多 OpenAI 兼容后端上不稳。
-- **RAG 是 Tool 不是 prompt 注入**：`getTool()` 把检索器包成 LangChain `tool()`（名字 `rag_search_<agent>`），LLM 用 function-calling 自主决定是否调用。代价是模型必须支持 OpenAI function calling 协议。
+- **invoke 是两阶段（先工具、后收尾）**：Phase 1 复用构造阶段已 bindTools 的 `this._modelWithTools`、不约束格式，让 LLM 自由调工具；Phase 2 只 `withStructuredOutput`、不带工具，追加一条 wrap-up 的 `HumanMessage` 要求按 `ModelOutput` 汇总。两阶段分开是因为「边调工具边强制结构化」在很多 OpenAI 兼容后端上不稳。
+- **工具集中在 `src/tools/`，结构刻意极简**：每个工具一个 `xxxTool.ts` 文件，**直接导出一个 LangChain `tool()` 单例**（不是工厂、没有 `ToolContext`/`types.ts`），如 `export const ragSearchTool = tool(...)`。`toolRegistry.ts` 只是手动 import 各工具、拼成一个数组 `export const allTools = [...]`（新增工具 = 新建文件 + 这里加一行 import + 一项）。`BaseAgent` 直接 `bindTools(allTools)`。所有 agent 共用同一批工具单例。目前两个：`rag_search`（私有 RAG，见下）和 `web_search`（联网搜索，见下）。
+- **RAG 工具靠 config 区分 agent**：`rag_search` 是单例，但要查哪个 agent 的私有表，由 `BaseAgent` 执行工具时通过 `RunnableConfig` 的 `configurable.agentName` 传入；工具内部 `getRetriever(agentName)`（`rag_retriever.ts` 里按 agent 名缓存的 `RAGRetriever` 单例表）拿到对应检索器。`BaseAgent.RAGRetriever` 也走同一个 `getRetriever(name)`，于是工具里的检索次数能被 `used_rag`（`callCount`）统计到。
+- **`web_search` 工具走外部 MCP**：[src/tools/webSearchTool.ts](src/tools/webSearchTool.ts) 导出的 `webSearchTool` 把**百度 AI Search 的 MCP 服务**（`@modelcontextprotocol/sdk` 的 `SSEClientTransport`，上游工具名 `AIsearch`，必填参数 `query`）包成 `web_search`。它**与 agent 无关**（搜公网、不分角色，忽略 config），MCP 连接是模块级懒加载单例、所有 agent 共用一条；连接失败 / 未配 key 时返回提示字符串而不抛错，不打断工具循环。端点 + key 由 `.env` 的 `BAIDU_SEARCH_MCP_URL` / `BAIDU_SEARCH_API_KEY` 配（实际请求拼成 `<url>?api_key=<key>`；**注意端点要用 https**，http 偶发握手被服务端关闭）。
+- **RAG 是 Tool 不是 prompt 注入**：`src/tools/ragSearchTool.ts` 导出的 `ragSearchTool` 把 `getRetriever(agentName).retrieve()` 包成 LangChain `tool()`（名字 `rag_search`；`agentName` 来自调用时的 `config.configurable.agentName`，据此查对应 agent 的私有表），LLM 用 function-calling 自主决定是否调用。代价是模型必须支持 OpenAI function calling 协议。
 - **rerank 已本地化**：旧版调 Cohere `rerank-v4.0-pro` API；现在用 `@huggingface/transformers` 在本地跑 cross-encoder（默认 `Xenova/bge-reranker-base`，`dtype=q8`），逐条算 query↔候选 的 logit 过 sigmoid 当 relevanceScore。失败时降级为「原序返回前 N 条」（见 `reranker.rerank` 的 catch 分支），不让链路断。返回结构与旧 Cohere 版一致，上游 `rag_retriever` 无需改。
 - **embedding 也本地化**：`@huggingface/transformers` 的 feature-extraction pipeline 加载 `Xenova/all-MiniLM-L6-v2`（ONNX，`dtype=fp32`），mean pooling + 归一化，输出 384 维直接做余弦检索。与 Python sentence-transformers 同款模型，向量空间近似一致（ONNX vs PyTorch 数值非逐位等同，语义可用）。
 - **路径相对性**：`config/settings.ts` 里 `resolveRel` 作为 zod `.transform` 把 `.env` 里 `SEED_DATA_PATH=./data/seed`、`EMBEDDING_CACHE_DIR=./models` 这类相对路径自动锚定到 `PROJECT_ROOT`。不要去掉这个 transform，否则从 IDE / 不同 cwd 启动会找不到种子 / 模型目录。
@@ -72,13 +75,15 @@ src/index.ts (load dotenv) → cli/main.ts:main() → [printAppBanner / bootstra
 | 项 | 当前命名 | 备注 |
 |---|---|---|
 | `BaseAgent` 实例上的 RAG 引用 | `this.RAGRetriever` | 刻意 PascalCase，不是 `this.ragRetriever`（沿用 Python 端约定） |
-| State / 响应 / MessageTurn 字段 | `next_agent` / `agent_name` / `used_rag` / `done` | 刻意 snake_case，会序列化进 LangGraph state，跨语言一致优先于 TS camelCase |
+| State / 响应字段 | `next_agent` / `agent_name` / `used_rag` / `done` | 刻意 snake_case，会序列化进 LangGraph state，跨语言一致优先于 TS camelCase |
+| 历史条目类型 | `AgentResponse`（`base.ts`） | **没有单独的 `MessageTurn`**：`AgentState.messages` 直接存 `AgentResponse[]`，`createNode` 把整条 `response` push 进去 |
 | 图节点名 | `` `${name}_node` `` | snake_case 后缀，如 `architect_node` |
 | BaseAgent prompt 拼装 | `_userPrompt(requirement, history)` / `_routingPrompt()` | 不是 `_buildUserPrompt` / `_routingInstructions` |
 | BaseAgent 主方法 | `invoke(requirement, conversationHistory)` | 不是 `process()` |
 | 路由 / 收尾解析 | `_buildAgentResponse(output)` | 结构化输出后构造 AgentResponse；**没有** `_getNextAgent` / `_parseRouting`（旧正则方案已删） |
 | 字符清理 | `cleanBadChars(text)` | 模块级导出函数 |
-| RAG 工具 | `RAGRetriever.restart()` / `.getTool()` | 不是 `resetTracking()` / `asLangchainTool()`；直接查 PostgreSQL，不需要 `markDirty()` |
+| RAG 检索器 | `RAGRetriever.restart()` / `.retrieve()` / `getRetriever(name)` | 不是 `resetTracking()`；直接查 PostgreSQL，不需要 `markDirty()`。每 agent 一个实例由 `rag_retriever.getRetriever(name)` 缓存；包成 LangChain Tool 的逻辑在 `src/tools/ragSearchTool.ts`（`ragSearchTool` 单例），`RAGRetriever` 上不再有 `getTool()` |
+| 工具 / 登记表 | `src/tools/*Tool.ts` 直接 `export const xxxTool = tool(...)` / `toolRegistry.ts` 的 `export const allTools = [...]` | 工具是单例，不是工厂；没有 `ToolContext`/`types.ts`。RAG 用 `config.configurable.agentName` 在调用时区分 agent，检索器走 `rag_retriever.getRetriever(name)` 缓存 |
 | Initializer 私函数 | `loadSeedsToPg` / `getSeedsContent` / `generateDocId` / `getExistingIds` | 单 agent 灌库入口是 `loadSeedsToPg`（ES 时代叫 `loadSeedsToEs`），不是 `_populateOneAgent` |
 | Initializer 入口 / 重置 | `buildAgentsIndices()` / `resetAgentDb(agent)` | 入口名保留 `buildAgentsIndices`（历史叫法），实际建的是 PostgreSQL 表 |
 | PostgreSQL 连接池 / 表 | `getPgPool()` / `ensureExtensions()` / `ensureAgentTable(agent)` / `countDocs(agent)` / `deleteAgentTable(agent)` | 表名由 `getTableName(agent)` → `<prefix>_<agent>`（ES 时代是 `getEsClient` / `ensureAgentIndex` / `getIndexName`） |

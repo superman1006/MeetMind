@@ -7,17 +7,7 @@
 
 import { Annotation } from "@langchain/langgraph";
 
-/**
- * 单条 agent 发言的快照，会被追加进 AgentState.messages。
- * 字段名按 Python 端保持 snake_case，避免跨语言序列化时不一致。
- */
-export interface MessageTurn {
-  agent_name: string;
-  role: string;
-  message: string;
-  /** 该 agent 指定的下一发言人；null 表示已结束 */
-  next_agent: string | null;
-}
+import type { AgentResponse } from "../agents/base.js";
 
 /**
  * 整张图共享的状态。`messages` 走追加 reducer，其他字段直接覆盖。
@@ -25,11 +15,15 @@ export interface MessageTurn {
 export const AgentStateAnnotation = Annotation.Root({
   // 架构师本轮输入的原始需求；整轮讨论中保持不变
   requirement: Annotation<string>({
+    // reducer 是一个合并函数。
+    // _existing是代表当前 requirement 的旧值，update 是新值；这里直接的操作是直接使用新值覆盖旧值
     reducer: (_existing, update) => update,
+    // default 代表当前 requirement 没有值时的默认值,需要传入一个函数
     default: () => "",
   }),
-  // 仅追加的讨论历史
-  messages: Annotation<MessageTurn[]>({
+  // 仅追加的讨论历史；每条就是一次 agent.invoke() 的产物 AgentResponse
+  messages: Annotation<AgentResponse[]>({
+    // 把传入的消息传入 reducer，和现有的消息列表合并成一个新的列表。这里使用 concat 来实现追加。
     reducer: (existing, update) => existing.concat(update),
     default: () => [],
   }),

@@ -59,6 +59,14 @@ const SettingsSchema = z.object({
   retrieveTopN: z.coerce.number().default(20),
   rerankTopN: z.coerce.number().default(5),
 
+  // ---------- Web 搜索（百度 AI Search MCP，SSE 传输）----------
+  // MCP SSE 端点（不含 api_key），实际请求时会拼成 `<url>?api_key=<key>`
+  baiduSearchMcpUrl: z
+    .string()
+    .default("https://appbuilder.baidu.com/v2/ai_search/mcp/sse"),
+  // AppBuilder API Key；为空时 web_search 工具直接返回未配置提示，不会拦截启动
+  baiduSearchApiKey: z.string().default(""),
+
   // ---------- 日志 / 安全阀 ----------
   logLevel: z.string().default("INFO"),
   maxIterations: z.coerce.number().default(15),
@@ -92,6 +100,8 @@ export function getSettings(): Settings {
     rerankDtype: process.env.RERANK_DTYPE,
     retrieveTopN: process.env.RETRIEVE_TOP_N,
     rerankTopN: process.env.RERANK_TOP_N,
+    baiduSearchMcpUrl: process.env.BAIDU_SEARCH_MCP_URL,
+    baiduSearchApiKey: process.env.BAIDU_SEARCH_API_KEY,
     logLevel: process.env.LOG_LEVEL,
     maxIterations: process.env.MAX_ITERATIONS,
   };

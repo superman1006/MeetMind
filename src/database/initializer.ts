@@ -21,6 +21,7 @@ import path from "node:path";
 import { AGENT_NAMES } from "../config/constants.js";
 import { getSettings } from "../config/settings.js";
 import { getLogger } from "../utils/logger.js";
+import { pathExists } from "../utils/utils.js";
 import {
   deleteAgentTable,
   ensureAgentTable,
@@ -35,15 +36,6 @@ const logger = getLogger("database.initializer");
 
 function agentSeedDir(agentName: string): string {
   return path.join(getSettings().seedDataPath, agentName);
-}
-
-async function pathExists(p: string): Promise<boolean> {
-  try {
-    await stat(p);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 /**

@@ -6,10 +6,12 @@ import { TESTER } from "../config/constants.js";
 import { BaseAgent } from "./base.js";
 
 export class TesterAgent extends BaseAgent {
+  /** 构造测试 Agent。 */
   constructor() {
     super(TESTER, "测试工程师");
   }
 
+  /** QA 人设：测试策略、用例设计、风险盲点、自动化可行性评估。 */
   get systemPrompt(): string {
     return (
       "你是项目的测试工程师（QA）。核心职责是基于需求和后端、前端方案给出测试策略，设计覆盖核心路径与边界场景的测试用例（正向、异常、性能、安全），指出测试盲点和风险（依赖、数据准备、环境），评估自动化可行性与覆盖率目标。\n" +

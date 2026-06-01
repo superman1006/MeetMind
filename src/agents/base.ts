@@ -13,6 +13,7 @@ import {
   ToolMessage,
 } from "@langchain/core/messages";
 import type { ToolCall } from "@langchain/core/messages/tool";
+import type { Runnable } from "@langchain/core/runnables";
 import { ChatOpenAI } from "@langchain/openai";
 import { z } from "zod";
 
@@ -23,44 +24,20 @@ import {
   isAgentName,
 } from "../config/constants.js";
 import { getSettings } from "../config/settings.js";
-import { RAGRetriever } from "../database/rag_retriever.js";
+import { type RAGRetriever, getRetriever } from "../database/rag_retriever.js";
 import { getLogger } from "../utils/logger.js";
+import { cleanBadChars} from "../utils/utils.js";
+import { ToolRegister } from "../tools/toolRegistry.js";
+import {ragSearchTool} from "../tools/ragSearchTool.js";
+import {webSearchTool} from "../tools/webSearchTool.js";
 
-const _MAX_TOOL_ITERATIONS = 5;
+const _MAX_TOOL_ITERATIONS = 3;
 const logger = getLogger("agents.base");
+const toolRegister = new ToolRegister();
+toolRegister.register(ragSearchTool)
+toolRegister.register(webSearchTool)
+const allTools = toolRegister.allTools
 
-/**
- * 清除字符串中孤立的 UTF-16 代理码点。
- * Node 字符串本身是 UTF-16，遇到孤立 surrogate 也不会崩，
- * 但有些下游 HTTP 客户端在序列化时会拒绝；保险起见替换为 `?`。
- */
-export function cleanBadChars(text: string): string {
-  if (!text) {
-    return text;
-  }
-  const out: string[] = [];
-  for (let i = 0; i < text.length; i++) {
-    const code = text.charCodeAt(i);
-    // high surrogate
-    if (code >= 0xd800 && code <= 0xdbff) {
-      const next = i + 1 < text.length ? text.charCodeAt(i + 1) : 0;
-      if (next >= 0xdc00 && next <= 0xdfff) {
-        out.push(text.charAt(i), text.charAt(i + 1));
-        i += 1;
-        continue;
-      }
-      out.push("?");
-      continue;
-    }
-    // unmatched low surrogate
-    if (code >= 0xdc00 && code <= 0xdfff) {
-      out.push("?");
-      continue;
-    }
-    out.push(text.charAt(i));
-  }
-  return out.join("");
-}
 
 /**
  * LLM 单轮回复的强约束 schema。
@@ -86,35 +63,37 @@ export const ModelOutputSchema = z.object({
         "'false' —— 还需要继续讨论。非架构师角色一律填 'false'。",
     ),
 });
-
 export type ModelOutput = z.infer<typeof ModelOutputSchema>;
 
+
 /**
- * 一次 Agent.invoke() 的产物，后续会被选择部分参数放到 AgentState 中。
+ * 一次 Agent.invoke() 的产物，同时也是追加进 `AgentState.messages` 的历史条目
  */
 export interface AgentResponse {
   agent_name: string;
   role: string;
   message: string;
-  /** 下一个发言 agent；null 表示讨论结束 */
   next_agent: string | null;
   done: boolean;
   used_rag: boolean;
 }
 
 export abstract class BaseAgent {
-  // readonly name: string;
-  // readonly role: string;
   /** 保留 Python 端命名 `self.RAGRetriever`，不要"修正"为 camelCase。 */
   readonly RAGRetriever: RAGRetriever;
   protected _model: ChatOpenAI;
+  /** 构造阶段就把 tools 绑好的模型，Phase 1 工具循环直接用，避免每轮 invoke 重复 bindTools。 */
+  protected _modelWithTools: Runnable;
 
+  /** 构造一个 Agent：拿到本 agent 的 RAGRetriever，按 settings 实例化 ChatOpenAI，bindTools(allTools)，关掉思考模式。 */
   protected constructor(
       readonly name: string,
       readonly role: string
   ) {
-    this.RAGRetriever = new RAGRetriever(name);
     const settings = getSettings();
+    // 和 rag_search 工具共用同一个 RAGRetriever 实例（按 agent 名缓存），
+    // 这样工具里的检索调用次数能被这里的 callCount / used_rag 统计到
+    this.RAGRetriever = getRetriever(name);
     this._model = new ChatOpenAI({
       apiKey: settings.apiKey,
       configuration: { baseURL: settings.baseUrl },
@@ -124,13 +103,18 @@ export abstract class BaseAgent {
       // 对标 Python 端 `extra_body={"thinking": {"type": "disabled"}}`
       modelKwargs: { thinking: { type: "disabled" } },
     });
+
+    // 初始化阶段一次性绑定全部工具（不在每轮 invoke 里反复 bindTools）
+    this._modelWithTools = this._model.bindTools(allTools);
   }
 
   // ---------- 提示词 ----------
 
+  /** 子类实现：返回该角色的 system prompt（人设 + 职责）。getter 形式，按属性访问。 */
   // 方法前面写 get，表示这是一个 getter，可以直接通过 this.systemPrompt 访问，而不是 this.systemPrompt()
   abstract get systemPrompt(): string;
 
+  /** 拼装本轮发言要喂给 LLM 的 user prompt：用户需求 + 历史 + 角色身份 + tools 使用守则。 */
   protected _userPrompt(requirement: string, history: string): string {
     return (
       `用户输入是：${requirement}\n` +
@@ -148,7 +132,9 @@ export abstract class BaseAgent {
     );
   }
 
+  /** 生成追加到 systemPrompt 末尾的路由约束段：教 LLM 如何填 ModelOutput 三字段 + 反循环硬规则。 */
   protected _routingPrompt(): string {
+    // 拿到除自己外所有 agents 名单
     const peersList: string[] = [];
     for (const a of AGENT_NAMES) {
       if (a !== this.name) {
@@ -173,7 +159,7 @@ export abstract class BaseAgent {
       "3. 如果你（非架构师）发现自己只能输出寒暄性回复、没有专业信息可补充，\n" +
       "   仍然把 next_agent 填 'architect'，由架构师决定是否 done='true'。\n" +
       "4. **反喧宾夺主**：如果用户输入里点名了具体角色（如「pm 查 X」「让 backend 做 Y」），\n" +
-      "   架构师【绝不能】自己先调用 rag_search_architect 等工具去做那件事，\n" +
+      "   架构师【绝不能】自己先调用 rag_search 等工具去做那件事，\n" +
       "   也不能自己代答；唯一动作是简短引导一句 + next_agent 填被点名的角色名。"
     );
   }
@@ -188,40 +174,40 @@ export abstract class BaseAgent {
    *   直到 LLM 不再要工具，或循环达 _MAX_TOOL_ITERATIONS 上限。
    *
    * Phase 2 —— 结构化收尾（只 withStructuredOutput，不再带工具）
-   *   在 messages 末尾追加一条 HumanMessage 明确要求按 ModelOutput 汇总。
+   *   在 Allmessages 末尾追加一条 HumanMessage 明确要求按 ModelOutput 汇总。
    */
   async invoke(
     requirement: string,
     conversationHistory: string,
   ): Promise<AgentResponse> {
     // 1) 清乱码：去掉 stdin 来的孤立 surrogate
-    const reqClean = cleanBadChars(requirement);
-    const histClean = cleanBadChars(conversationHistory);
+    const requirement_cleaned = cleanBadChars(requirement);
+    const history_cleaned = cleanBadChars(conversationHistory);
 
-    // 2) 准备 prompts + RAG 工具
-    this.RAGRetriever.restart(); // 清零本轮 RAG 调用计数
-    const ragTool = this.RAGRetriever.getTool();
+    // 2) 准备 prompts（工具已在构造阶段绑好，这里只清零本轮 RAG 调用计数）
+    this.RAGRetriever.restart();
 
-    const userPrompt = cleanBadChars(this._userPrompt(reqClean, histClean));
+    const userPrompt = cleanBadChars(this._userPrompt(requirement_cleaned, history_cleaned));
     const systemPrompt = cleanBadChars(this.systemPrompt + this._routingPrompt());
 
-    const messages: BaseMessage[] = [
+    const Allmessages: BaseMessage[] = [
       new SystemMessage(systemPrompt),
-      new HumanMessage(userPrompt),
+      new HumanMessage(userPrompt), // 所有的历史消息
     ];
 
     // ===== Phase 1：工具循环 =====
-    const modelWithTools = this._model.bindTools([ragTool]); // 把 RAG 暴露给 LLM 自主调用
-
+    // _modelWithTools 在构造阶段就已 bindTools，这里直接复用
     try {
+      // exhausted 是使用工具次数是否达到上限的标志；如果达到上限就强制进入 Phase 2，避免讨论卡死在工具调用上
       let exhausted = true;
       for (let i = 0; i < _MAX_TOOL_ITERATIONS; i++) {
-        const aiMsg = (await modelWithTools.invoke(messages)) as AIMessage;
-        messages.push(aiMsg);
+        const aiMsg = (await this._modelWithTools.invoke(Allmessages)) as AIMessage;
+        Allmessages.push(aiMsg);
 
         // LLM 不再要工具，结束循环进收尾
         const toolCalls: ToolCall[] = aiMsg.tool_calls ?? [];
         if (toolCalls.length === 0) {
+          // 工具使用没有达到上限，但是没有工具就退出循环了
           exhausted = false;
           break;
         }
@@ -233,22 +219,26 @@ export abstract class BaseAgent {
           logger.info(
             `[${this.name}] → 调用工具 ${toolName} args=${JSON.stringify(toolArgs)}`,
           );
-          let toolResult: string;
-          if (toolName === ragTool.name) {
-            const raw = await ragTool.invoke(
-              toolArgs as { query: string },
-            );
-            // ragTool 的 invoke 返回 string | ToolMessage；保留为字符串
-            if (typeof raw === "string") {
-              toolResult = raw;
-            } else {
-              const content = (raw as { content?: unknown }).content;
-              toolResult = typeof content === "string" ? content : String(content);
+          // 按名字从工具列表里找到要执行的工具；找不到就回一个占位提示，不让循环崩
+          let toolToRun = undefined;
+          for (const t of allTools) {
+            if (t.name === toolName) {
+              toolToRun = t;
+              break;
             }
+          }
+          let toolResult: string;
+          if (toolToRun) {
+            // 通过 config 把自己的 agent 名传给工具（rag_search 据此查对应私有表；web_search 忽略）
+            const out = await toolToRun.invoke(toolArgs, {
+              configurable: { agentName: this.name },
+            });
+            // 工具 invoke 可能返回 string 或 ToolMessage；统一收敛成字符串
+            toolResult = typeof out === "string" ? out : JSON.stringify(out);
           } else {
             toolResult = `(未知工具: ${toolName})`;
           }
-          messages.push(
+          Allmessages.push(
             new ToolMessage({ content: toolResult, tool_call_id: toolId }),
           );
         }
@@ -268,13 +258,13 @@ export abstract class BaseAgent {
     }
 
     // ===== Phase 2：结构化收尾 =====
-    const wrapUpPrompt =
+    const structurePrompt =
       "以上是你（和工具）已经产出的全部上下文。" +
       "请基于以上信息，按 ModelOutput 三字段输出最终结果：\n" +
       "  • content    : 给团队看的正文（不要重复罗列上面已说过的话，给出最终结论 / 建议 / 行动项即可）\n" +
       "  • next_agent : 下一个发言 agent（architect / backend / frontend / tester / pm 之一）\n" +
       "  • done       : 'true' 或 'false'";
-    messages.push(new HumanMessage(wrapUpPrompt));
+    Allmessages.push(new HumanMessage(structurePrompt));
 
     // 不带工具，强制按 ModelOutput schema 输出
     const structuredModel = this._model.withStructuredOutput(ModelOutputSchema, {
@@ -283,7 +273,7 @@ export abstract class BaseAgent {
 
     let finalOutput: ModelOutput;
     try {
-      finalOutput = await structuredModel.invoke(messages);
+      finalOutput = await structuredModel.invoke(Allmessages);
     } catch (exc) {
       logger.error(`[${this.name}] Phase 2 结构化收尾失败: ${String(exc)}`);
       finalOutput = {
@@ -298,6 +288,7 @@ export abstract class BaseAgent {
 
   // ---------- 辅助方法 ----------
 
+  /** 把 LLM 的结构化输出 coerce 成 AgentResponse：done 字符串→bool，非法 next_agent 兜底回架构师。 */
   private _buildAgentResponse(output: ModelOutput): AgentResponse {
     const doneStr = output.done.trim().toLowerCase();
     const isDone =
@@ -317,7 +308,8 @@ export abstract class BaseAgent {
       nextAgentName = ARCHITECT;
     }
 
-    return {
+    let result: AgentResponse;
+    result = {
       agent_name: this.name,
       role: this.role,
       message: output.content.trim(),
@@ -325,5 +317,6 @@ export abstract class BaseAgent {
       done: isDone,
       used_rag: this.RAGRetriever.callCount > 0,
     };
+    return result;
   }
 }

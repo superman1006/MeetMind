@@ -23,6 +23,7 @@ export const ROLE_DESCRIPTIONS: Record<string, string> = {
   [PM]: "产品经理 (Product Manager)",
 };
 
+/** 类型守卫：判断字符串是否是 5 个合法 agent 名（architect / backend / frontend / tester / pm）之一。 */
 export function isAgentName(value: string): value is AgentName {
   return (AGENT_NAMES as readonly string[]).includes(value);
 }

@@ -11,7 +11,7 @@
 import { END, START, StateGraph } from "@langchain/langgraph";
 
 import { ArchitectAgent } from "../agents/architect.js";
-import type { BaseAgent } from "../agents/base.js";
+import type { AgentResponse, BaseAgent } from "../agents/base.js";
 import { BackendAgent } from "../agents/backend.js";
 import { FrontendAgent } from "../agents/frontend.js";
 import { PMAgent } from "../agents/pm.js";
@@ -24,17 +24,17 @@ import {
   PM,
   TESTER,
 } from "../config/constants.js";
-import { printAgentInfo } from "../utils/formatting.js";
+import { printAgentInfo } from "../utils/utils.js";
 import { getLogger } from "../utils/logger.js";
 import { routeToWhichAgent } from "./route.js";
 import {
   AgentStateAnnotation,
   type AgentState,
-  type MessageTurn,
 } from "./state.js";
 
 const logger = getLogger("graph.builder");
 
+/** 一次性 new 出 5 个角色 Agent 实例，返回 name → Agent 的字典。 */
 function buildAllAgents(): Record<string, BaseAgent> {
   return {
     [ARCHITECT]: new ArchitectAgent(),
@@ -45,7 +45,8 @@ function buildAllAgents(): Record<string, BaseAgent> {
   };
 }
 
-function formatHistory(messages: MessageTurn[]): string {
+/** 把 messages 数组拼成 "--- agent (role) ---\n正文" 风格的纯文本，用作下一个 Agent 的 history 上下文。 */
+function formatHistory(messages: AgentResponse[]): string {
   if (messages.length === 0) {
     return "";
   }
@@ -56,6 +57,7 @@ function formatHistory(messages: MessageTurn[]): string {
   return chunks.join("\n\n");
 }
 
+/** 把一个 BaseAgent 包成 LangGraph 节点函数：读 state → 调 agent.invoke → 返回增量 state（messages 追加、其余覆盖）。 */
 function createNode(agent: BaseAgent) {
   return async (state: AgentState): Promise<Partial<AgentState>> => {
     const requirement = state.requirement ?? "";
@@ -73,16 +75,9 @@ function createNode(agent: BaseAgent) {
       usedRag: response.used_rag,
     });
 
-    const newTurn: MessageTurn = {
-      agent_name: response.agent_name,
-      role: response.role,
-      message: response.message,
-      next_agent: response.next_agent,
-    };
-
-    // 只回增量：messages 追加，其余字段覆盖进 State
+    // 只回增量：messages 追加（整条 AgentResponse 直接进历史），其余字段覆盖进 State
     return {
-      messages: [newTurn],
+      messages: [response],
       next_agent: response.next_agent,
       done: response.done,
       iteration,

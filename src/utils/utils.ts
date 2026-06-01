@@ -3,6 +3,8 @@
  * 还原 Python 端 rich 的 Panel / Table / 分隔线 / 系统提示效果。
  */
 
+import { stat } from "node:fs/promises";
+
 import boxen from "boxen";
 import chalk, { type ChalkInstance } from "chalk";
 import Table from "cli-table3";
@@ -148,4 +150,46 @@ export function colorize(role: string): ChalkInstance {
     default:
       return chalk.bold.white;
   }
+}
+
+
+/**
+ * 判断路径是否存在（文件或目录均可）；stat 抛错即视为不存在。
+ */
+export async function pathExists(p: string): Promise<boolean> {
+  try {
+    await stat(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+
+export function cleanBadChars(text: string): string {
+  if (!text) {
+    return text;
+  }
+  const out: string[] = [];
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    // high surrogate
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = i + 1 < text.length ? text.charCodeAt(i + 1) : 0;
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        out.push(text.charAt(i), text.charAt(i + 1));
+        i += 1;
+        continue;
+      }
+      out.push("?");
+      continue;
+    }
+    // unmatched low surrogate
+    if (code >= 0xdc00 && code <= 0xdfff) {
+      out.push("?");
+      continue;
+    }
+    out.push(text.charAt(i));
+  }
+  return out.join("");
 }

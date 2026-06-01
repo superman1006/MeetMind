@@ -38,11 +38,13 @@ function makeRecursive(params: SplitParams): RecursiveCharacterTextSplitter {
 
 // ---------- 各类型 splitter ----------
 
+/** JSON 不切：种子条目通常已是短文本，按原样进库。 */
 export function splitJson(docs: RawDoc[]): RawDoc[] {
   // 种子 JSON 通常是手写短条目，按原样灌入
   return docs;
 }
 
+/** Markdown 二次切块：先按标题（MarkdownTextSplitter）再按长度限到 chunkSize 内。 */
 export async function splitMarkdown(docs: RawDoc[]): Promise<RawDoc[]> {
   // langchain.js 的 MarkdownTextSplitter 已经内置了按 #/##/### 切的策略
   // 之后再用 Recursive 限长
@@ -66,18 +68,22 @@ export async function splitMarkdown(docs: RawDoc[]): Promise<RawDoc[]> {
   return out;
 }
 
+/** PDF 二次切块：按长度递归切（chunkSize=600, overlap=80）。 */
 export async function splitPdf(docs: RawDoc[]): Promise<RawDoc[]> {
   return splitWithRecursive(docs, PARAMS.pdf);
 }
 
+/** DOCX 二次切块：按长度递归切（chunkSize=500, overlap=60）。 */
 export async function splitDocx(docs: RawDoc[]): Promise<RawDoc[]> {
   return splitWithRecursive(docs, PARAMS.docx);
 }
 
+/** 纯文本二次切块：按长度递归切（chunkSize=500, overlap=60）。 */
 export async function splitText(docs: RawDoc[]): Promise<RawDoc[]> {
   return splitWithRecursive(docs, PARAMS.txt);
 }
 
+/** 共用的「按长度递归切」实现：跑 RecursiveCharacterTextSplitter，给每个 chunk 标 `source#chunkN`。 */
 async function splitWithRecursive(
   docs: RawDoc[],
   params: SplitParams,
