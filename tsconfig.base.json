@@ -10,14 +10,9 @@
     "strict": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
-    "types": ["node"],
     "forceConsistentCasingInFileNames": true,
-    "outDir": "dist",
-    "rootDir": "src",
     "declaration": false,
     "sourceMap": true,
     "noUncheckedIndexedAccess": false
-  },
-  "include": ["src/**/*.ts"],
-  "exclude": ["node_modules", "dist", "meetmind", "tests"]
+  }
 }

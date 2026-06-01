@@ -11,8 +11,9 @@ import { z } from "zod";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// settings.ts 位于 src/config/settings.ts，向上两级是项目根
-export const PROJECT_ROOT = path.resolve(__dirname, "..", "..");
+// settings.ts 现位于 apps/runtime/src/config/settings.ts（编译后 dist 同深度），
+// 向上四级 config→src→runtime→apps 才是仓库根（data/ models/ .env 都在根，两个 app 共享）
+export const PROJECT_ROOT = path.resolve(__dirname, "..", "..", "..", "..");
 
 // 先加载 .env，再让 schema 读 process.env
 loadDotenv({ path: path.join(PROJECT_ROOT, ".env") });

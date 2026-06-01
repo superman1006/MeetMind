@@ -1,0 +1,41 @@
+{
+  "name": "@meetmind/runtime",
+  "version": "0.2.0",
+  "description": "MeetMind 引擎 + HTTP/SSE 服务",
+  "type": "module",
+  "private": true,
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "dev:cli": "tsx src/cli/main.ts",
+    "build": "tsc -p .",
+    "start:prod": "node dist/index.js",
+    "typecheck": "tsc -p . --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^3.0.0",
+    "@langchain/core": "^0.3.0",
+    "@langchain/langgraph": "^0.2.0",
+    "@langchain/openai": "^0.3.0",
+    "@langchain/textsplitters": "^0.1.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "boxen": "^8.0.1",
+    "chalk": "^5.3.0",
+    "cli-table3": "^0.6.5",
+    "cohere-ai": "^7.14.0",
+    "dotenv": "^16.4.5",
+    "mammoth": "^1.8.0",
+    "ora": "^8.1.0",
+    "pdfjs-dist": "^4.7.76",
+    "pg": "^8.13.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/pg": "^8.11.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}
