@@ -7,6 +7,15 @@ import { config } from "dotenv";
 
 config();
 
+// 兜底:任何漏网的 Promise rejection / 同步异常都只记日志,不让服务进程退出。
+// (Node 15+ 默认会因未处理的 rejection 直接退出进程,对长跑的 HTTP 服务是致命的。)
+process.on("unhandledRejection", (reason) => {
+  console.error("[unhandledRejection] 已捕获,服务继续运行:", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[uncaughtException] 已捕获,服务继续运行:", err);
+});
+
 const { bootstrap } = await import("./bootstrap.js");
 const { buildGraph } = await import("./graph/builder.js");
 const { startServer } = await import("./server/httpServer.js");

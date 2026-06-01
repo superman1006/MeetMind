@@ -45,11 +45,17 @@ export async function handleRpc(graph: CompiledGraph, body: RpcRequest) {
       return rpcError(id, -32000, "上一轮讨论还在进行");
     }
     sessions.setBusy(sessionId, true);
-    // 后台跑,不 await:HTTP 立即返回,真正的输出全走 SSE;跑完(成功或失败)都清 busy
+    // 后台跑,不 await:HTTP 立即返回,真正的输出全走 SSE;跑完(成功或失败)都清 busy。
+    // 必须 catch:否则 runDiscussion 一旦 reject,finally 会把异常再抛出成未处理的
+    // Promise rejection,在 Node 15+ 上直接拖垮整个服务进程。
     const running = runDiscussion(graph, sessionId, requirement);
-    running.finally(() => {
-      sessions.setBusy(sessionId, false);
-    });
+    running
+      .catch((exc) => {
+        console.error(`[rpc] runDiscussion 未捕获异常 (会话 ${sessionId}):`, exc);
+      })
+      .finally(() => {
+        sessions.setBusy(sessionId, false);
+      });
     return rpcOk(id, { ok: true });
   }
 

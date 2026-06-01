@@ -21,10 +21,7 @@ export async function runDiscussion(
   sessionId: string,
   requirement: string,
 ): Promise<void> {
-  // 取该会话已有发言(从 DB)作为跨轮记忆起点(首轮为空)
-  const priorMessages = await chatStore.getMessages(sessionId);
-
-  // 把本轮用户输入也记进历史(agent_name=user),复刻 CLI 的做法
+  // 把本轮用户输入记进历史(agent_name=user),复刻 CLI 的做法
   const userTurn: AgentResponse = {
     agent_name: "user",
     role: "用户",
@@ -33,18 +30,22 @@ export async function runDiscussion(
     done: false,
     used_rag: false,
   };
-  const seedMessages = [...priorMessages, userTurn];
 
-  const initialState: AgentState = {
-    requirement,
-    messages: seedMessages,
-    next_agent: null,
-    done: false,
-    iteration: 0,
-  };
-
-  let finalState: AgentState = initialState;
+  // 整个函数体都在 try 里:任何异常(含读 DB)都转成 SSE error,绝不让 Promise reject 逃逸。
   try {
+    // 取该会话已有发言(从 DB)作为跨轮记忆起点(首轮为空)
+    const priorMessages = await chatStore.getMessages(sessionId);
+    const seedMessages = [...priorMessages, userTurn];
+
+    const initialState: AgentState = {
+      requirement,
+      messages: seedMessages,
+      next_agent: null,
+      done: false,
+      iteration: 0,
+    };
+
+    let finalState: AgentState = initialState;
     const stream = await graph.stream(initialState, {
       recursionLimit: 50,
       streamMode: ["custom", "values"],
