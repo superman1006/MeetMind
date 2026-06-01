@@ -180,7 +180,7 @@ export abstract class BaseAgent {
   async invoke(
     requirement: string,
     conversationHistory: string,
-    opts?: { onDelta?: (text: string) => void },
+    opts?: { onDelta?: (text: string) => void; onToolUse?: (toolName: string) => void },
   ): Promise<AgentResponse> {
     // 1) 清乱码：去掉 stdin 来的孤立 surrogate
     const requirement_cleaned = cleanBadChars(requirement);
@@ -231,6 +231,8 @@ export abstract class BaseAgent {
           }
           let toolResult: string;
           if (toolToRun) {
+            // 服务端路径:工具执行前通知前端显示 "UsingTools: <工具名>" 标签
+            opts?.onToolUse?.(toolName);
             // 通过 config 把自己的 agent 名传给工具（rag_search 据此查对应私有表；web_search 忽略）
             const out = await toolToRun.invoke(toolArgs, {
               configurable: { agentName: this.name },

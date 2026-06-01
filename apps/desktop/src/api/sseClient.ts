@@ -1,6 +1,7 @@
 /** 连 /events 的 SSE,把各事件交给 handlers。事件结构与 runtime 的 NodeStreamChunk + round_done/error 对齐。 */
 export interface TurnStartPayload { turnId: string; agent_name: string; role: string }
 export interface DeltaPayload { turnId: string; text: string }
+export interface UsingToolsPayload { turnId: string; tool: string }
 export interface TurnEndPayload { turnId: string; next_agent: string | null; done: boolean; used_rag: boolean }
 export interface RoundDonePayload { done: boolean }
 export interface ErrorPayload { message: string; turnId?: string }
@@ -8,6 +9,7 @@ export interface ErrorPayload { message: string; turnId?: string }
 export interface SseHandlers {
   onTurnStart: (p: TurnStartPayload) => void;
   onDelta: (p: DeltaPayload) => void;
+  onUsingTools: (p: UsingToolsPayload) => void;
   onTurnEnd: (p: TurnEndPayload) => void;
   onRoundDone: (p: RoundDonePayload) => void;
   onError: (p: ErrorPayload) => void;
@@ -22,6 +24,9 @@ export function openEvents(sessionId: string, handlers: SseHandlers): EventSourc
   });
   es.addEventListener("delta", (e) => {
     handlers.onDelta(JSON.parse((e as MessageEvent).data));
+  });
+  es.addEventListener("using_tools", (e) => {
+    handlers.onUsingTools(JSON.parse((e as MessageEvent).data));
   });
   es.addEventListener("turn_end", (e) => {
     handlers.onTurnEnd(JSON.parse((e as MessageEvent).data));

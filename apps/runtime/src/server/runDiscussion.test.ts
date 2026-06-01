@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { runDiscussion } from "./runDiscussion.js";
 import * as sse from "./sse.js";
-import * as sessions from "./sessions.js";
+import * as chatStore from "../database/chatStore.js";
 import type { AgentResponse } from "../agents/base.js";
 
 function archTurn(message: string): AgentResponse {
@@ -21,6 +21,7 @@ function fakeGraph(finalMessages: AgentResponse[]) {
     async stream() {
       async function* gen() {
         yield ["custom", { kind: "turn_start", turnId: "architect-1", agent_name: "architect", role: "架构师" }];
+        yield ["custom", { kind: "using_tools", turnId: "architect-1", tool: "rag_search" }];
         yield ["custom", { kind: "delta", turnId: "architect-1", text: "好" }];
         yield ["custom", { kind: "turn_end", turnId: "architect-1", next_agent: "architect", done: true, used_rag: false }];
         yield ["values", { requirement: "x", messages: finalMessages, next_agent: "architect", done: true, iteration: 1 }];
@@ -31,30 +32,36 @@ function fakeGraph(finalMessages: AgentResponse[]) {
 }
 
 describe("runDiscussion", () => {
+  let sseSpy: ReturnType<typeof vi.spyOn>;
+  let appendSpy: ReturnType<typeof vi.spyOn>;
+
   beforeEach(() => {
-    sessions.resetSession("s1");
-    sessions.setBusy("s1", false);
+    sseSpy = vi.spyOn(sse, "send").mockImplementation(() => {});
+    appendSpy = vi.spyOn(chatStore, "appendMessages").mockResolvedValue(undefined);
+    vi.spyOn(chatStore, "getMessages").mockResolvedValue([]);
   });
 
-  it("custom 帧转发成 SSE, values 末帧更新记忆, 最后发 round_done", async () => {
-    const sent: Array<{ event: string; data: unknown }> = [];
-    const spy = vi.spyOn(sse, "send").mockImplementation((_sid, event, data) => {
-      sent.push({ event, data });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("custom 帧(含 using_tools)转发成 SSE, 末帧后落库新 turn, 最后发 round_done", async () => {
+    const sent: string[] = [];
+    sseSpy.mockImplementation((_sid: string, event: string) => {
+      sent.push(event);
     });
 
     const finalMessages = [archTurn("最终结论")];
     await runDiscussion(fakeGraph(finalMessages), "s1", "做个登录页");
 
-    const eventNames = sent.map((s) => s.event);
-    expect(eventNames).toEqual(["turn_start", "delta", "turn_end", "round_done"]);
-    expect(sessions.getMessages("s1")).toHaveLength(1);
-    expect(sessions.getMessages("s1")[0].message).toBe("最终结论");
-
-    spy.mockRestore();
+    expect(sent).toEqual(["turn_start", "using_tools", "delta", "turn_end", "round_done"]);
+    // prior 为空 → 新增 turn = 全部 finalMessages
+    expect(appendSpy).toHaveBeenCalledWith("s1", finalMessages);
   });
 
-  it("seedMessages 含用户输入作为起点(跨轮记忆)", async () => {
-    sessions.replaceMessages("s1", [archTurn("上一轮")]);
+  it("seedMessages = 已有历史 + 本轮 user 输入; 只落库新增部分", async () => {
+    vi.spyOn(chatStore, "getMessages").mockResolvedValue([archTurn("上一轮")]);
+
     let capturedSeed: AgentResponse[] = [];
     const graph = {
       async stream(initial: { messages: AgentResponse[] }) {
@@ -67,9 +74,15 @@ describe("runDiscussion", () => {
     } as unknown as Parameters<typeof runDiscussion>[0];
 
     await runDiscussion(graph, "s1", "第二轮需求");
+
+    // 起点 = 上一轮历史 + 本轮 user 输入
     expect(capturedSeed).toHaveLength(2);
     expect(capturedSeed[0].message).toBe("上一轮");
     expect(capturedSeed[1].agent_name).toBe("user");
     expect(capturedSeed[1].message).toBe("第二轮需求");
+    // 只落库 prior 之后的新增(=本轮 user turn)
+    const appended = appendSpy.mock.calls[0][1] as AgentResponse[];
+    expect(appended).toHaveLength(1);
+    expect(appended[0].agent_name).toBe("user");
   });
 });

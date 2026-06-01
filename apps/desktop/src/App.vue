@@ -6,10 +6,11 @@ import ChatWindow from "./components/ChatWindow.vue";
 
 const sessions = useSessionsStore();
 
-// 启动即建一个会话,避免空屏
-onMounted(() => {
+// 启动:先从服务端拉会话列表;一个都没有再建一个,避免空屏
+onMounted(async () => {
+  await sessions.load();
   if (sessions.list.length === 0) {
-    sessions.newSession();
+    await sessions.newSession();
   }
 });
 </script>

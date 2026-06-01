@@ -1,9 +1,15 @@
 /**
- * JSON-RPC 2.0 分发。chat.send 触发一轮讨论(后台跑,立即返回,输出走 SSE);session.reset 清记忆。
+ * JSON-RPC 2.0 分发。
+ *   chat.send         触发一轮讨论(后台跑,立即返回,输出走 SSE)
+ *   session.create    新建会话(返 {id,title,created_at})
+ *   session.list      列出所有会话
+ *   session.messages  取某会话历史(渲染气泡用)
+ *   session.delete    删除会话(级联删消息;busy 中拒删)
  */
 import type { buildGraph } from "../graph/builder.js";
 import { runDiscussion } from "./runDiscussion.js";
 import * as sessions from "./sessions.js";
+import * as chatStore from "../database/chatStore.js";
 
 export interface RpcRequest {
   jsonrpc: "2.0";
@@ -47,11 +53,36 @@ export async function handleRpc(graph: CompiledGraph, body: RpcRequest) {
     return rpcOk(id, { ok: true });
   }
 
-  if (body.method === "session.reset") {
+  if (body.method === "session.create") {
+    const rawTitle = params.title;
+    const title = typeof rawTitle === "string" && rawTitle ? rawTitle : "新会话";
+    const meta = await chatStore.createSession(title);
+    return rpcOk(id, meta);
+  }
+
+  if (body.method === "session.list") {
+    const list = await chatStore.listSessions();
+    return rpcOk(id, list);
+  }
+
+  if (body.method === "session.messages") {
     const sessionId = params.sessionId;
-    if (typeof sessionId === "string" && sessionId) {
-      sessions.resetSession(sessionId);
+    if (typeof sessionId !== "string" || !sessionId) {
+      return rpcError(id, -32602, "缺少 sessionId");
     }
+    const messages = await chatStore.getMessages(sessionId);
+    return rpcOk(id, messages);
+  }
+
+  if (body.method === "session.delete") {
+    const sessionId = params.sessionId;
+    if (typeof sessionId !== "string" || !sessionId) {
+      return rpcError(id, -32602, "缺少 sessionId");
+    }
+    if (sessions.isBusy(sessionId)) {
+      return rpcError(id, -32000, "该会话讨论进行中,无法删除");
+    }
+    await chatStore.deleteSession(sessionId);
     return rpcOk(id, { ok: true });
   }
 

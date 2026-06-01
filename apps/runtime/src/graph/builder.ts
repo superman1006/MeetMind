@@ -78,15 +78,19 @@ function createNode(agent: BaseAgent) {
     }
 
     let onDelta: ((text: string) => void) | undefined = undefined;
+    let onToolUse: ((toolName: string) => void) | undefined = undefined;
     if (writer) {
       onDelta = (text: string) => {
         writer({ kind: "delta", turnId, text });
+      };
+      onToolUse = (toolName: string) => {
+        writer({ kind: "using_tools", turnId, tool: toolName });
       };
     }
 
     let response;
     if (onDelta) {
-      response = await agent.invoke(requirement, history, { onDelta });
+      response = await agent.invoke(requirement, history, { onDelta, onToolUse });
     } else {
       response = await agent.invoke(requirement, history);
     }

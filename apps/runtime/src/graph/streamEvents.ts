@@ -5,6 +5,7 @@
 export type NodeStreamChunk =
   | { kind: "turn_start"; turnId: string; agent_name: string; role: string }
   | { kind: "delta"; turnId: string; text: string }
+  | { kind: "using_tools"; turnId: string; tool: string }
   | {
       kind: "turn_end";
       turnId: string;

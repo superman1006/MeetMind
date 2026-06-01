@@ -16,6 +16,7 @@ const thinking = computed(() => !props.bubble.isUser && props.bubble.text.length
     <div class="bubble" :style="{ background: color.bg, color: color.fg }">
       <div class="head">
         <span class="role">{{ bubble.role || color.label }}</span>
+        <span v-if="bubble.usingTools" class="tool" :title="`正在调用工具 ${bubble.tool}`">UsingTools: {{ bubble.tool }}</span>
         <span v-if="bubble.used_rag" class="rag">RAG</span>
       </div>
       <TypingDots v-if="thinking" />
@@ -31,5 +32,6 @@ const thinking = computed(() => !props.bubble.isUser && props.bubble.text.length
 .head { display: flex; gap: 8px; align-items: center; font-size: 12px; opacity: 0.85; margin-bottom: 4px; }
 .role { font-weight: 600; }
 .rag { font-size: 10px; border: 1px solid currentColor; border-radius: 6px; padding: 0 4px; }
+.tool { font-size: 10px; border: 1px solid currentColor; border-radius: 6px; padding: 0 4px; }
 .text { font-size: 14px; line-height: 1.5; }
 </style>

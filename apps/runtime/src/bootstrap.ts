@@ -11,6 +11,7 @@ import ora from "ora";
 import { AGENT_NAMES } from "./config/constants.js";
 import { getSettings } from "./config/settings.js";
 import { countDocs, pingDb } from "./database/client.js";
+import { ensureChatTables } from "./database/chatStore.js";
 import { getEmbedderModel } from "./database/embedding.js";
 import { buildAgentsIndices } from "./database/initializer.js";
 import { pathExists, printSystem } from "./utils/utils.js";
@@ -47,6 +48,10 @@ export async function bootstrap(): Promise<void> {
     process.exit(1);
   }
   printSystem(chalk.green("✓ PostgreSQL 已就绪"));
+
+  // ---------- 会话 / 消息表 ----------
+  await ensureChatTables();
+  printSystem(chalk.green("✓ 会话 / 消息表已就绪"));
 
   // ---------- 本地 Rerank ----------
   printSystem(

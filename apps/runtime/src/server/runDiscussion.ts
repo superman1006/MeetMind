@@ -9,7 +9,7 @@ import type { AgentState } from "../graph/state.js";
 import type { NodeStreamChunk } from "../graph/streamEvents.js";
 import type { buildGraph } from "../graph/builder.js";
 import * as sse from "./sse.js";
-import * as sessions from "./sessions.js";
+import * as chatStore from "../database/chatStore.js";
 import { getLogger } from "../utils/logger.js";
 
 const logger = getLogger("server.runDiscussion");
@@ -21,8 +21,8 @@ export async function runDiscussion(
   sessionId: string,
   requirement: string,
 ): Promise<void> {
-  // 取该会话已有发言作为跨轮记忆起点(首轮为空)
-  const priorMessages = sessions.getMessages(sessionId);
+  // 取该会话已有发言(从 DB)作为跨轮记忆起点(首轮为空)
+  const priorMessages = await chatStore.getMessages(sessionId);
 
   // 把本轮用户输入也记进历史(agent_name=user),复刻 CLI 的做法
   const userTurn: AgentResponse = {
@@ -60,8 +60,11 @@ export async function runDiscussion(
       }
     }
 
+    // 本轮新增的 turn = 最终 messages 超出 seed(=prior+userTurn 之前的 prior)的尾部,
+    // 即 userTurn + 各 agent 回复;增量落库,不重写整段。
     const finalMessages = finalState.messages ?? seedMessages;
-    sessions.replaceMessages(sessionId, finalMessages);
+    const newTurns = finalMessages.slice(priorMessages.length);
+    await chatStore.appendMessages(sessionId, newTurns);
     sse.send(sessionId, "round_done", { done: finalState.done ?? false });
   } catch (exc) {
     logger.error(`[runDiscussion] 会话 ${sessionId} 出错: ${String(exc)}`);
