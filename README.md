@@ -133,6 +133,20 @@ pnpm build && pnpm start:prod
 
 ---
 
+## Monorepo 启动（runtime + desktop）
+
+前置：`docker compose up -d` 起 PostgreSQL；首次 `pnpm install`。
+
+- 同时起前后端：`pnpm dev`
+- 只起后端服务（3002）：`pnpm dev:runtime`
+- 只起前端（5173，浏览器联调）：`pnpm dev:desktop`
+- 旧 CLI（保留，不再是默认入口）：`pnpm dev:cli`
+- 桌面外壳（需先装 Rust）：`pnpm --filter @meetmind/desktop tauri dev`
+
+后端 3002 暴露 `POST /api`（JSON-RPC：`chat.send` / `session.reset`）与 `GET /events?sessionId=…`（SSE：`turn_start`/`delta`/`turn_end`/`round_done`/`error`）。会话不持久化，前端刷新即清空。
+
+---
+
 ## 运行流程
 
 1. **启动时**：所有 agent 的种子文件灌入对应 PostgreSQL 表（content + embedding + metadata）。

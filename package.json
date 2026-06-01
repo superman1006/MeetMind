@@ -6,6 +6,7 @@
   "private": true,
   "engines": { "node": ">=20" },
   "scripts": {
+    "dev": "pnpm --parallel --filter \"./apps/*\" dev",
     "dev:runtime": "pnpm --filter @meetmind/runtime dev",
     "dev:desktop": "pnpm --filter @meetmind/desktop dev",
     "dev:cli": "pnpm --filter @meetmind/runtime dev:cli",
