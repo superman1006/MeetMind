@@ -9,6 +9,7 @@
  */
 
 import { END, START, StateGraph } from "@langchain/langgraph";
+import type { LangGraphRunnableConfig } from "@langchain/langgraph";
 
 import { ArchitectAgent } from "../agents/architect.js";
 import type { AgentResponse, BaseAgent } from "../agents/base.js";
@@ -57,16 +58,38 @@ function formatHistory(messages: AgentResponse[]): string {
   return chunks.join("\n\n");
 }
 
-/** 把一个 BaseAgent 包成 LangGraph 节点函数：读 state → 调 agent.invoke → 返回增量 state（messages 追加、其余覆盖）。 */
+/** 把一个 BaseAgent 包成 LangGraph 节点函数：读 state → 发 turn_start → 调 agent.invoke(流式) → 发 turn_end → 返回增量 state。 */
 function createNode(agent: BaseAgent) {
-  return async (state: AgentState): Promise<Partial<AgentState>> => {
+  return async (
+    state: AgentState,
+    config: LangGraphRunnableConfig,
+  ): Promise<Partial<AgentState>> => {
     const requirement = state.requirement ?? "";
     const history = formatHistory(state.messages ?? []); // 历史发言拼成文本喂给 agent
     const iteration = (state.iteration ?? 0) + 1; // 轮次 +1，供安全阀判断
+    const turnId = `${agent.name}-${iteration}`;
 
     logger.info(`[graph] iteration=${iteration}  →  invoking ${agent.name}_node`);
 
-    const response = await agent.invoke(requirement, history); // 跑该 agent 一次推理
+    // 有 writer(服务端流式)才发事件 + 传 onDelta；无 writer(CLI)则保持原非流式行为
+    const writer = config.writer;
+    if (writer) {
+      writer({ kind: "turn_start", turnId, agent_name: agent.name, role: agent.role });
+    }
+
+    let onDelta: ((text: string) => void) | undefined = undefined;
+    if (writer) {
+      onDelta = (text: string) => {
+        writer({ kind: "delta", turnId, text });
+      };
+    }
+
+    let response;
+    if (onDelta) {
+      response = await agent.invoke(requirement, history, { onDelta });
+    } else {
+      response = await agent.invoke(requirement, history);
+    }
 
     printAgentInfo({
       agentName: response.agent_name,
@@ -74,6 +97,16 @@ function createNode(agent: BaseAgent) {
       nextRole: response.done ? "DONE" : response.next_agent,
       usedRag: response.used_rag,
     });
+
+    if (writer) {
+      writer({
+        kind: "turn_end",
+        turnId,
+        next_agent: response.next_agent,
+        done: response.done,
+        used_rag: response.used_rag,
+      });
+    }
 
     // 只回增量：messages 追加（整条 AgentResponse 直接进历史），其余字段覆盖进 State
     return {
