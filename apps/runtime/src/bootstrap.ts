@@ -14,6 +14,7 @@ import { countDocs, pingDb } from "./database/client.js";
 import { ensureChatTables } from "./database/chatStore.js";
 import { getEmbedderModel } from "./database/embedding.js";
 import { buildAgentsTables } from "./database/initializer.js";
+import { initMcpTools } from "./tools/mcpClient.js";
 import { pathExists, printSystem } from "./utils/utils.js";
 import { setupLogging } from "./utils/logger.js";
 
@@ -125,5 +126,14 @@ export async function bootstrap(): Promise<void> {
     const total = await countDocs(agent);
     const status = newCount > 0 ? `新增 ${chalk.bold.green(String(newCount))} 条，` : chalk.dim("无新增，");
     printSystem(`  ✓ ${chalk.bold(agent)}: ${status}表现共 ${total} 条文档`);
+  }
+
+  // ---------- 加载 MCP 工具（web 搜索等，经 MultiServerMCPClient 适配） ----------
+  // 必须在 buildGraph 之前：agent 构造时会 bindTools(allTools)，这里把 MCP 工具追加进同一数组。
+  const mcpCount = await initMcpTools();
+  if (mcpCount > 0) {
+    printSystem(chalk.green(`✓ MCP 工具已加载：${mcpCount} 个（web 搜索经百度 AI Search MCP，工具名 AIsearch）`));
+  } else {
+    printSystem(chalk.dim("MCP 工具：未加载（未配置 BAIDU_SEARCH_API_KEY 或连接失败，web 搜索不可用）"));
   }
 }

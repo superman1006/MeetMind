@@ -32,7 +32,7 @@ function filterLines(output: string, filter: string): string {
 }
 
 export const processTool = tool(
-  async ({ filter }: { filter?: string }) => {
+  async ({ filter }: { filter?: string | null }) => {
     try {
       const result = await execFileAsync("ps", ["aux"]);
       const output = result.stdout;
@@ -50,10 +50,13 @@ export const processTool = tool(
       "调用命令行 ps aux 查看当前主机上正在运行的进程。" +
       "可选参数 filter：只返回命令行 / 用户中含该关键字的进程行（表头始终保留）。",
     schema: z.object({
+      // OpenAI 兼容的 function-calling 要求可选字段必须同时 nullable，
+      // 否则后端报 "uses .optional() without .nullable()"。这里用 nullable+optional。
       filter: z
         .string()
+        .nullable()
         .optional()
-        .describe("可选的过滤关键字，只保留含此关键字的进程行"),
+        .describe("可选的过滤关键字，只保留含此关键字的进程行；不过滤就传 null 或不传"),
     }),
   },
 );

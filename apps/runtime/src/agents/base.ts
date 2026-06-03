@@ -28,24 +28,12 @@ import { type RAGRetriever, getRetriever } from "../database/rag_retriever.js";
 import { getLogger } from "../utils/logger.js";
 import { cleanBadChars} from "../utils/utils.js";
 import { streamStructuredContent } from "./streamStructured.js";
-import { ToolRegister } from "../tools/toolRegistry.js";
-import {ragSearchTool} from "../tools/ragSearchTool.js";
-import {webSearchTool} from "../tools/webSearchTool.js";
-import {echoTool} from "../tools/echoTool.js";
-import {processTool} from "../tools/processTool.js";
-import {listDirTool} from "../tools/listDirTool.js";
-import {readFileTool} from "../tools/readFileTool.js";
+// 全局工具清单（本地工具 + bootstrap 阶段异步登记的 MCP 工具）。
+// allTools 是共享数组引用：bootstrap 里追加的 MCP 工具，这里 bindTools 时也能看到。
+import { allTools } from "../tools/registry.js";
 
 const _MAX_TOOL_ITERATIONS = 3;
 const logger = getLogger("agents.base");
-const toolRegister = new ToolRegister();
-toolRegister.register(ragSearchTool)
-toolRegister.register(webSearchTool)
-toolRegister.register(echoTool)
-toolRegister.register(processTool)
-toolRegister.register(listDirTool)
-toolRegister.register(readFileTool)
-const allTools = toolRegister.allTools
 
 
 /**

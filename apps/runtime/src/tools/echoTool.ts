@@ -11,11 +11,14 @@ import { promisify } from "node:util";
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 
+// execFile 是 nodejs 提供的命令行工具，用于执行命令行命令
+// promisify 是 nodejs 提供的工具，用于将回调函数转换为 Promise 函数
 const execFileAsync = promisify(execFile);
 
 export const echoTool = tool(
   async ({ text }: { text: string }) => {
     try {
+      // 传入命令的名字和参数，这里是 echo 命令和 text 参数
       const result = await execFileAsync("echo", [text]);
       // echo 默认在末尾补一个换行，去掉它更干净
       const output = result.stdout.replace(/\n$/, "");
