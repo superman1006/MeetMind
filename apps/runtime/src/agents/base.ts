@@ -31,12 +31,20 @@ import { streamStructuredContent } from "./streamStructured.js";
 import { ToolRegister } from "../tools/toolRegistry.js";
 import {ragSearchTool} from "../tools/ragSearchTool.js";
 import {webSearchTool} from "../tools/webSearchTool.js";
+import {echoTool} from "../tools/echoTool.js";
+import {processTool} from "../tools/processTool.js";
+import {listDirTool} from "../tools/listDirTool.js";
+import {readFileTool} from "../tools/readFileTool.js";
 
 const _MAX_TOOL_ITERATIONS = 3;
 const logger = getLogger("agents.base");
 const toolRegister = new ToolRegister();
 toolRegister.register(ragSearchTool)
 toolRegister.register(webSearchTool)
+toolRegister.register(echoTool)
+toolRegister.register(processTool)
+toolRegister.register(listDirTool)
+toolRegister.register(readFileTool)
 const allTools = toolRegister.allTools
 
 
@@ -68,6 +76,34 @@ export type ModelOutput = z.infer<typeof ModelOutputSchema>;
 
 
 /**
+ * 会议结束「一次性整理」的结构化输出 schema：一次 LLM 调用同时产出
+ * 会议纪要(minutes) + 每个角色的工作段(按 agent 名平铺)。
+ *
+ * 刻意保持单层(和 ModelOutputSchema 一样、不嵌套)，因为很多 OpenAI 兼容后端
+ * 对嵌套对象的结构化输出不稳。字段由 AGENT_NAMES 动态拼出，避免和常量脱节。
+ */
+const _summaryShape: Record<string, z.ZodString> = {
+  minutes: z
+    .string()
+    .describe(
+      "会议纪要正文：用户提出了什么需求或问题、讨论中达成的关键结论与决策、尚未解决的待办事项。" +
+        "markdown 正文，不要加一级 / 二级标题（标题由外层组装）。",
+    ),
+};
+for (const _name of AGENT_NAMES) {
+  const _roleDesc = ROLE_DESCRIPTIONS[_name] ?? _name;
+  _summaryShape[_name] = z
+    .string()
+    .describe(
+      `${_roleDesc} 在本次需求中需要完成的具体工作 / 行动项。` +
+        "用 markdown 列表或短段落；与该角色职责无关、没有要做的事，就只填两个字：无。不要加标题。",
+    );
+}
+export const MeetingSummarySchema = z.object(_summaryShape);
+export type MeetingSummary = z.infer<typeof MeetingSummarySchema>;
+
+
+/**
  * 一次 Agent.invoke() 的产物，同时也是追加进 `AgentState.messages` 的历史条目
  */
 export interface AgentResponse {
@@ -85,7 +121,7 @@ export interface AgentResponse {
 }
 
 export abstract class BaseAgent {
-  /** 保留 Python 端命名 `self.RAGRetriever`，不要"修正"为 camelCase。 */
+  /** 刻意用 PascalCase 命名 `RAGRetriever`，不要"修正"为 camelCase。 */
   readonly RAGRetriever: RAGRetriever;
   protected _model: ChatOpenAI;
   /** 构造阶段就把 tools 绑好的模型，Phase 1 工具循环直接用，避免每轮 invoke 重复 bindTools。 */
@@ -106,7 +142,7 @@ export abstract class BaseAgent {
       model: settings.modelName,
       maxTokens: settings.maxTokens,
       temperature: settings.temperature,
-      // 对标 Python 端 `extra_body={"thinking": {"type": "disabled"}}`
+      // 关闭后端的 thinking 模式（OpenAI 兼容协议的扩展字段）
       modelKwargs: { thinking: { type: "disabled" } },
     });
 
@@ -338,5 +374,44 @@ export abstract class BaseAgent {
       used_rag: this.RAGRetriever.callCount > 0,
     };
     return result;
+  }
+
+  // ---------- 会议结束：一次性整理 ----------
+
+  /**
+   * 会议结束整理：单次 LLM 调用同时产出会议纪要 + 各角色工作段。
+   *
+   * 用 `withStructuredOutput(MeetingSummarySchema)` 强制返回平铺的
+   * `{ minutes, <每个 agent 名>: 工作段 }`；取代旧版「架构师 1 次纪要 + 5 个角色各 1 次」共 6 次调用。
+   * 失败时返回占位结构（minutes 写错误信息、各角色填「无」）而非抛出，让外层照常组装出一份文件。
+   */
+  async summarizeAll(transcript: string): Promise<MeetingSummary> {
+    const transcript_cleaned = cleanBadChars(transcript);
+    const prompt =
+      "下面是一次多角色团队会议的完整记录。请你通读后，一次性整理出下列各字段：\n" +
+      "  • minutes：一份简洁清晰的会议纪要（用户需求 / 关键结论与决策 / 待办事项）。\n" +
+      "  • 其余每个字段：分别站在对应角色的立场，总结该角色在本次需求中要做的具体工作 / 行动项；\n" +
+      "    与该角色无关、没有要做的事就只填两个字：无。\n" +
+      "所有字段都用 markdown 正文 / 列表，不要加标题（标题由外层另加）。\n\n" +
+      `=== 会议记录 ===\n${transcript_cleaned}`;
+    const structuredModel = this._model.withStructuredOutput(MeetingSummarySchema, {
+      name: "MeetingSummary",
+    });
+    try {
+      const result = await structuredModel.invoke([
+        new SystemMessage(cleanBadChars(this.systemPrompt)),
+        new HumanMessage(cleanBadChars(prompt)),
+      ]);
+      return result;
+    } catch (exc) {
+      logger.error(`[${this.name}] summarizeAll 失败: ${String(exc)}`);
+      const fallback: Record<string, string> = {
+        minutes: `(会议纪要生成失败: ${String(exc)})`,
+      };
+      for (const name of AGENT_NAMES) {
+        fallback[name] = "无";
+      }
+      return fallback;
+    }
   }
 }

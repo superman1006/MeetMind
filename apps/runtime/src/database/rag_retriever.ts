@@ -66,7 +66,7 @@ export class RAGRetriever {
    * 关键字召回：pg_trgm 的 word_similarity 衡量「query 与 content 某片段」的 trigram 相似度。
    * 只取有任何重叠（>0）的候选，按相似度降序拉 size 条。中文召回偏粗，但后面有 rerank 兜底。
    */
-  private async bm25Search(query: string, size: number): Promise<DbRow[]> {
+  private async KeyWordSearch(query: string, size: number): Promise<DbRow[]> {
     const pool = getPgPool();
     try {
       const tableName = await this.getTableName();
@@ -76,6 +76,7 @@ export class RAGRetriever {
         `WHERE word_similarity($1, content) > 0 ` +
         `ORDER BY score DESC ` +
         `LIMIT $2`;
+      // sql 语句中的$1 和 $2 是占位符，会被 query 中的 [query, size] 替换
       const resp = await pool.query(sql, [query, size]);
       return resp.rows as DbRow[];
     } catch (exc) {
@@ -88,37 +89,40 @@ export class RAGRetriever {
    * 向量检索：query 算 embedding 后用 pgvector cosine 距离算子 `<=>` 取最近的 size 条。
    * score = 1 - 距离，语义上等价于余弦相似度（越大越相关）。
    */
-  private async knnSearch(query: string, size: number): Promise<DbRow[]> {
+  private async VectorSearch(query: string, size: number): Promise<DbRow[]> {
     const pool = getPgPool();
     try {
       const tableName = await this.getTableName();
+      // 将 query 转换为向量
       const queryVec = await embed(query);
-      const vectorLiteral = `[${queryVec.join(",")}]`;
+      // 将向量转换为字符串
+      const vectorStr = `[${queryVec.join(",")}]`;
       const sql =
         `SELECT id, content, metadata, 1 - (embedding <=> $1::vector) AS score ` +
         `FROM ${tableName} ` +
         `ORDER BY embedding <=> $1::vector ` +
         `LIMIT $2`;
-      const resp = await pool.query(sql, [vectorLiteral, size]);
+      // sql 语句中的$1 和 $2 是占位符，会被下方的 [vectorStr, size] 替换
+      const resp = await pool.query(sql, [vectorStr, size]);
       return resp.rows as DbRow[];
     } catch (exc) {
-      logger.warning(`[${this.agentName}] kNN 检索失败: ${String(exc)}`);
+      logger.warning(`[${this.agentName}] 向量检索失败: ${String(exc)}`);
       return [];
     }
   }
 
   /** 关键字与向量两路命中按行 id 取并集；关键字结果优先排前，向量结果补在后。 */
-  private merge(bm25Hits: DbRow[], knnHits: DbRow[]): DbRow[] {
+  private merge(keywordHits: DbRow[], vectorHits: DbRow[]): DbRow[] {
     const seen = new Set<string>();
     const merged: DbRow[] = [];
-    for (const hit of bm25Hits) {
+    for (const hit of keywordHits) {
       if (seen.has(hit.id)) {
         continue;
       }
       seen.add(hit.id);
       merged.push(hit);
     }
-    for (const hit of knnHits) {
+    for (const hit of vectorHits) {
       if (seen.has(hit.id)) {
         continue;
       }
@@ -139,20 +143,20 @@ export class RAGRetriever {
     const candidateN = settings.retrieveTopN;
 
     // 1) 关键字与向量两路并行检索，互不阻塞
-    const [knnHits, bm25Hits] = await Promise.all([
-      this.knnSearch(query, candidateN),
-      this.bm25Search(query, candidateN),
+    const [vectorHits, keywordHits] = await Promise.all([
+      this.VectorSearch(query, candidateN),
+      this.KeyWordSearch(query, candidateN),
     ]);
 
     // 2) 合并去重
-    const merged = this.merge(bm25Hits, knnHits);
+    const merged = this.merge(keywordHits, vectorHits);
     if (merged.length === 0) {
       logger.info(`[${this.agentName}] 混合检索: 命中 0 条`);
       return [];
     }
 
     logger.info(
-      `[${this.agentName}] 混合检索: 关键字 ${bm25Hits.length} + kNN ${knnHits.length} → 去重后 ${merged.length} 条 送入 rerank`,
+      `[${this.agentName}] 混合检索: 关键字 ${keywordHits.length} + 向量 ${vectorHits.length} → 去重后 ${merged.length} 条 送入 rerank`,
     );
 
     // 3) 本地 cross-encoder rerank：取每条候选正文送重排

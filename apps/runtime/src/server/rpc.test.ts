@@ -4,6 +4,12 @@ import * as sessions from "./sessions.js";
 import * as chatStore from "../database/chatStore.js";
 import type { buildGraph } from "../graph/builder.js";
 
+// chat.end 会在后台调 summarizeMeeting（内部跑 LLM）。单测里 mock 成 no-op，避免真调模型。
+vi.mock("./meetingSummary.js", () => ({
+  summarizeMeeting: vi.fn(() => Promise.resolve()),
+}));
+import * as meetingSummary from "./meetingSummary.js";
+
 // 假 graph:stream 立即结束,不产生任何事件
 const fakeGraph = {
   async stream() {
@@ -25,12 +31,15 @@ describe("handleRpc", () => {
       id: "new-id",
       title: "新会话",
       created_at: "2026-06-01T00:00:00Z",
+      ended: false,
     });
     vi.spyOn(chatStore, "listSessions").mockResolvedValue([
-      { id: "a", title: "会话A", created_at: "2026-06-01T00:00:00Z" },
+      { id: "a", title: "会话A", created_at: "2026-06-01T00:00:00Z", ended: false },
     ]);
     vi.spyOn(chatStore, "deleteSession").mockResolvedValue(undefined);
     vi.spyOn(chatStore, "renameSession").mockResolvedValue(undefined);
+    vi.spyOn(chatStore, "isSessionEnded").mockResolvedValue(false);
+    vi.spyOn(chatStore, "markSessionEnded").mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -172,6 +181,78 @@ describe("handleRpc", () => {
       params: { sessionId: "s1", title: "   " },
     })) as { error?: { code: number } };
     expect(res.error?.code).toBe(-32602);
+  });
+
+  it("chat.end 缺 sessionId 返回 -32602", async () => {
+    const res = (await handleRpc(fakeGraph, {
+      jsonrpc: "2.0",
+      id: 20,
+      method: "chat.end",
+      params: {},
+    })) as { error?: { code: number } };
+    expect(res.error?.code).toBe(-32602);
+  });
+
+  it("chat.end busy 会话返回 -32000", async () => {
+    sessions.setBusy("s1", true);
+    const res = (await handleRpc(fakeGraph, {
+      jsonrpc: "2.0",
+      id: 21,
+      method: "chat.end",
+      params: { sessionId: "s1" },
+    })) as { error?: { code: number } };
+    expect(res.error?.code).toBe(-32000);
+  });
+
+  it("chat.end 空闲时上锁、后台整理、回 ok", async () => {
+    vi.mocked(meetingSummary.summarizeMeeting).mockClear();
+    const setBusy = vi.spyOn(sessions, "setBusy");
+    const res = await handleRpc(fakeGraph, {
+      jsonrpc: "2.0",
+      id: 22,
+      method: "chat.end",
+      params: { sessionId: "s1" },
+    });
+    expect(res).toMatchObject({ jsonrpc: "2.0", id: 22, result: { ok: true } });
+    expect(setBusy).toHaveBeenCalledWith("s1", true);
+    expect(meetingSummary.summarizeMeeting).toHaveBeenCalledWith("s1");
+  });
+
+  it("chat.end 已结束会话返回 -32000,且不再整理", async () => {
+    vi.mocked(meetingSummary.summarizeMeeting).mockClear();
+    vi.mocked(chatStore.isSessionEnded).mockResolvedValue(true);
+    const res = (await handleRpc(fakeGraph, {
+      jsonrpc: "2.0",
+      id: 23,
+      method: "chat.end",
+      params: { sessionId: "s1" },
+    })) as { error?: { code: number } };
+    expect(res.error?.code).toBe(-32000);
+    expect(meetingSummary.summarizeMeeting).not.toHaveBeenCalled();
+  });
+
+  it("chat.end 空闲未结束时持久化 markSessionEnded 并整理", async () => {
+    vi.mocked(meetingSummary.summarizeMeeting).mockClear();
+    const res = await handleRpc(fakeGraph, {
+      jsonrpc: "2.0",
+      id: 24,
+      method: "chat.end",
+      params: { sessionId: "s1" },
+    });
+    expect(res).toMatchObject({ result: { ok: true } });
+    expect(chatStore.markSessionEnded).toHaveBeenCalledWith("s1");
+    expect(meetingSummary.summarizeMeeting).toHaveBeenCalledWith("s1");
+  });
+
+  it("chat.send 已结束会话返回 -32000", async () => {
+    vi.mocked(chatStore.isSessionEnded).mockResolvedValue(true);
+    const res = (await handleRpc(fakeGraph, {
+      jsonrpc: "2.0",
+      id: 25,
+      method: "chat.send",
+      params: { sessionId: "s1", requirement: "继续讨论" },
+    })) as { error?: { code: number } };
+    expect(res.error?.code).toBe(-32000);
   });
 
   it("未知方法返回 -32601", async () => {

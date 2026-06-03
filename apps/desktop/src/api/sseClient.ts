@@ -13,6 +13,10 @@ export interface TurnEndPayload { turnId: string; next_agent: string | null; don
 export interface RoundDonePayload { done: boolean }
 // error:服务器侧出错,把错误信息推过来给前端显示。
 export interface ErrorPayload { message: string; turnId?: string }
+// summary_done:会议纪要整理完成,file=生成的 markdown 文件路径。
+export interface SummaryDonePayload { file: string }
+// summary_error:整理纪要过程出错。
+export interface SummaryErrorPayload { message: string }
 
 // 一组回调:每种事件来时分别调哪个函数处理(由界面/状态层传进来)。
 export interface SseHandlers {
@@ -22,6 +26,8 @@ export interface SseHandlers {
   onTurnEnd: (p: TurnEndPayload) => void;
   onRoundDone: (p: RoundDonePayload) => void;
   onError: (p: ErrorPayload) => void;
+  onSummaryDone: (p: SummaryDonePayload) => void;
+  onSummaryError: (p: SummaryErrorPayload) => void;
 }
 
 // 订阅某个会话的事件流,返回连接对象(调用方可随时 es.close() 断开)。
@@ -40,6 +46,8 @@ export function openEvents(sessionId: string, handlers: SseHandlers): EventSourc
     logger.info({ url, sessionId }, "← 事件流已连接");
   };
 
+
+  // 下面这些 回调函数 后面会被 后端 推来的事件触发(根据类型)
   // 下面每个 addEventListener("类型名", ...) = “收到这类事件时怎么办”;
   // e.data 是服务器推来的 JSON 字符串,先 parse 还原成对象,再转交给上层 handler。
   es.addEventListener("turn_start", (e) => {
@@ -65,6 +73,13 @@ export function openEvents(sessionId: string, handlers: SseHandlers): EventSourc
       logger.error({ url, sessionId, payload }, "← 事件流业务错误");
       handlers.onError(payload);
     }
+  });
+
+  es.addEventListener("summary_done", (e) => {
+    handlers.onSummaryDone(JSON.parse((e as MessageEvent).data));
+  });
+  es.addEventListener("summary_error", (e) => {
+    handlers.onSummaryError(JSON.parse((e as MessageEvent).data));
   });
 
   return es;

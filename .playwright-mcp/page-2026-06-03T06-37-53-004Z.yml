@@ -1,0 +1,39 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]: 会话
+      - generic [ref=e7]:
+        - button "搜索会话" [ref=e9] [cursor=pointer]:
+          - img [ref=e10]
+        - button "收缩会话列表" [ref=e14] [cursor=pointer]:
+          - img [ref=e15]
+    - button "+ 新会话" [ref=e17] [cursor=pointer]
+    - list [ref=e18]:
+      - listitem [ref=e21] [cursor=pointer]:
+        - generic [ref=e22]: 会话 8
+      - listitem [ref=e23] [cursor=pointer]:
+        - generic [ref=e24]: 会话 7
+      - listitem [ref=e25] [cursor=pointer]:
+        - generic [ref=e26]: 哈哈
+      - listitem [ref=e27] [cursor=pointer]:
+        - generic [ref=e28]: 会话 5
+      - listitem [ref=e29] [cursor=pointer]:
+        - generic [ref=e30]: 会话 4
+      - listitem [ref=e31] [cursor=pointer]:
+        - generic [ref=e32]: 会话 3
+      - listitem [ref=e33] [cursor=pointer]:
+        - generic [ref=e34]: 会话 2
+      - listitem [ref=e35] [cursor=pointer]:
+        - generic [ref=e36]: "1"
+    - button "☀️" [ref=e19] [cursor=pointer]
+  - generic [ref=e37]:
+    - generic [ref=e38]: 哈哈
+    - generic [ref=e40]:
+      - textbox "输入项目需求… (Enter 发送, Shift+Enter 换行)" [ref=e41]
+      - button "发送" [active] [ref=e42] [cursor=pointer]:
+        - generic [ref=e43]: 发送
+      - button "结束" [disabled] [ref=e44]
+    - generic [ref=e48]:
+      - heading "会话已结束" [level=2] [ref=e49]
+      - paragraph [ref=e50]: 当前会话已结束，无法继续发送消息。
+      - button "知道了" [ref=e52] [cursor=pointer]

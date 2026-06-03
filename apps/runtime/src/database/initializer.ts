@@ -187,7 +187,7 @@ export async function loadSeedsToPg(agentName: string): Promise<number> {
  * 为所有 agent 灌入种子数据。返回每个 agent 本次新增的文档数。
  * 灌库前先确保 pgvector / pg_trgm 扩展就位。
  */
-export async function buildAgentsIndices(): Promise<Record<string, number>> {
+export async function buildAgentsTables(): Promise<Record<string, number>> {
   await ensureExtensions();
   const results: Record<string, number> = {};
   for (const agent of AGENT_NAMES) {

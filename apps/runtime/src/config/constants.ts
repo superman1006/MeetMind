@@ -1,7 +1,6 @@
 /**
  * MeetMind 应用级常量。
- * 字段名按 Python 端 snake_case 保留（会序列化进 LangGraph state），
- * 跨语言一致性优先于 TS camelCase 风格。
+ * 字段名刻意用 snake_case（会序列化进 LangGraph state），统一不混 camelCase。
  */
 
 export const ARCHITECT = "architect";

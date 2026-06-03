@@ -18,6 +18,7 @@ import { getLogger } from "../utils/logger.js";
 import { getTableName } from "./constants.js";
 import { getEmbedModelDim } from "./embedding.js";
 
+// 导入 nodejs 提供的 postgresql 的连接池
 const { Pool } = pg;
 
 const logger = getLogger("database.client");
@@ -25,7 +26,7 @@ const logger = getLogger("database.client");
 let _pool: pg.Pool | null = null;
 
 /**
- * 返回进程内单例的 PostgreSQL 连接池。对标旧 ES 端的单例 client。
+ * 返回进程内单例的 PostgreSQL 连接池。
  */
 export function getPgPool(): pg.Pool {
   if (_pool !== null) {
@@ -34,7 +35,7 @@ export function getPgPool(): pg.Pool {
   const settings = getSettings();
   _pool = new Pool({
     connectionString: settings.pgUrl,
-    // 本地单机 demo，连接数不用太多
+    // 池里最多同时保持 10 条到 PostgreSQL 的连接；多出来的 query 会排队等空闲连接
     max: 10,
   });
   // 池里某条连接异常时只记日志，不让进程崩
@@ -64,7 +65,9 @@ export async function pingDb(): Promise<boolean> {
  */
 export async function ensureExtensions(): Promise<void> {
   const pool = getPgPool();
+  // 创建pgvecoter向量扩展，用于向量检索
   await pool.query("CREATE EXTENSION IF NOT EXISTS vector");
+  // 创建关键字扩展，用于关键字召回
   await pool.query("CREATE EXTENSION IF NOT EXISTS pg_trgm");
 }
 
@@ -82,19 +85,20 @@ export async function ensureAgentTable(agentName: string): Promise<string> {
   const dim = await getEmbedModelDim();
 
   // 表名只由受控 prefix + 固定 agent 名拼成，是合法标识符，可安全内插
-  const createTableSql =
+  const createAgentTableSql =
     `CREATE TABLE IF NOT EXISTS ${tableName} (` +
     `  id TEXT PRIMARY KEY,` +
     `  content TEXT NOT NULL,` +
     `  metadata JSONB,` +
     `  embedding vector(${dim})` +
     `)`;
-  await pool.query(createTableSql);
+  await pool.query(createAgentTableSql);
 
   // 向量索引：HNSW + cosine，给 kNN 检索加速（数据量小时可有可无，留着更规范）
   const vectorIndexSql =
     `CREATE INDEX IF NOT EXISTS ${tableName}_embedding_idx ` +
     `ON ${tableName} USING hnsw (embedding vector_cosine_ops)`;
+    // pgvector 提供的 hnsw 索引，给向量检索加速
   await pool.query(vectorIndexSql);
 
   // 关键字索引：trigram GIN，给 word_similarity 关键字召回加速
@@ -117,8 +121,8 @@ export async function countDocs(agentName: string): Promise<number> {
     "SELECT to_regclass($1) AS reg",
     [tableName],
   );
-  const reg = existsResult.rows[0]?.reg;
-  if (!reg) {
+  const tableRef = existsResult.rows[0]?.reg;
+  if (!tableRef) {
     return 0;
   }
 

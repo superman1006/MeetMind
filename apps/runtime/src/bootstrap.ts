@@ -13,7 +13,7 @@ import { getSettings } from "./config/settings.js";
 import { countDocs, pingDb } from "./database/client.js";
 import { ensureChatTables } from "./database/chatStore.js";
 import { getEmbedderModel } from "./database/embedding.js";
-import { buildAgentsIndices } from "./database/initializer.js";
+import { buildAgentsTables } from "./database/initializer.js";
 import { pathExists, printSystem } from "./utils/utils.js";
 import { setupLogging } from "./utils/logger.js";
 
@@ -113,7 +113,7 @@ export async function bootstrap(): Promise<void> {
   const spinner2 = ora({ text: chalk.bold.cyan("初始化 5 个 Agent 的 PostgreSQL 表..."), spinner: "dots" }).start();
   let added: Record<string, number>;
   try {
-    added = await buildAgentsIndices();
+    added = await buildAgentsTables();
     spinner2.succeed("PostgreSQL 表初始化完成");
   } catch (exc) {
     spinner2.fail("PostgreSQL 表初始化失败");

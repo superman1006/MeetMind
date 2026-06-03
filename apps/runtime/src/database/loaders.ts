@@ -164,7 +164,7 @@ export async function loadDocx(filePath: string): Promise<RawDoc[]> {
   const result = await mammoth.extractRawText({ buffer });
   const baseName = path.basename(filePath);
 
-  // mammoth 输出按段落用 `\n` 分隔；过滤空段对齐 python-docx 的 doc.paragraphs 行为
+  // mammoth 输出按段落用 `\n` 分隔；过滤掉空段
   const docs: RawDoc[] = [];
   for (const para of result.value.split(/\r?\n/)) {
     const text = para.trim();

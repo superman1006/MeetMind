@@ -36,7 +36,7 @@ import {
 const logger = getLogger("graph.builder");
 
 /** 一次性 new 出 5 个角色 Agent 实例，返回 name → Agent 的字典。 */
-function buildAllAgents(): Record<string, BaseAgent> {
+export function buildAllAgents(): Record<string, BaseAgent> {
   return {
     [ARCHITECT]: new ArchitectAgent(),
     [BACKEND]: new BackendAgent(),
@@ -77,7 +77,9 @@ function createNode(agent: BaseAgent) {
       writer({ kind: "turn_start", turnId, agent_name: agent.name, role: agent.role });
     }
 
+    // onDelta:每当 Phase 2 结构化收尾时，content 又多出一小段字，就调一次这个回调，把「新增的那截」传出去
     let onDelta: ((text: string) => void) | undefined = undefined;
+    // onToolUse:在 Phase 1 真正执行某个工具之前调一次，参数是工具名（如 rag_search、web_search）。
     let onToolUse: ((toolName: string) => void) | undefined = undefined;
     const toolsUsed: string[] = []; // 本轮用过的工具名(去重),用于落库 + 前端常驻标签
     if (writer) {

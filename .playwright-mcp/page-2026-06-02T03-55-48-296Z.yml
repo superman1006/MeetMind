@@ -1,0 +1,34 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]: 会话
+      - button "«" [ref=e7] [cursor=pointer]
+    - button "+ 新会话" [ref=e8] [cursor=pointer]
+    - list [ref=e9]:
+      - listitem [ref=e10] [cursor=pointer]:
+        - generic [ref=e35]: 重命名成功验证
+        - button "✎" [ref=e36]
+        - button "×" [ref=e37]
+      - listitem [ref=e12] [cursor=pointer]:
+        - generic [ref=e13]: 会话 1
+  - generic [ref=e14]:
+    - generic [ref=e15]:
+      - generic [ref=e17]:
+        - generic [ref=e19]: 用户
+        - generic [ref=e20]: 你好
+        - time [ref=e21]: 2026-6-2 11:53
+      - generic [ref=e23]:
+        - generic [ref=e25]: 架构师（项目老大）
+        - generic [ref=e26]: 你好！有什么可以帮你的吗？
+        - time [ref=e27]: 2026-6-2 11:53
+      - generic [ref=e39]:
+        - generic [ref=e41]: 用户
+        - generic [ref=e42]: 帮我设计一个高并发的订单系统
+        - time [ref=e43]: 2026-6-2 11:55
+      - generic [ref=e45]:
+        - generic [ref=e47]: 架构师（项目老大）
+        - generic "加载中" [ref=e48]
+    - generic [ref=e28]:
+      - textbox "输入项目需求… (Enter 发送, Shift+Enter 换行)" [active] [ref=e29]
+      - button "打断" [ref=e52] [cursor=pointer]:
+        - generic "打断" [ref=e53]

@@ -54,6 +54,8 @@ export async function runDiscussion(
       signal,
     });
 
+
+    // 拿到 graph 的输出后用 sse.send 转发成 SSE 事件推给前端
     for await (const item of stream) {
       const [mode, chunk] = item as [string, unknown];
       if (mode === "custom") {

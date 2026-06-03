@@ -2,8 +2,7 @@
  * 文本 → 稠密向量。
  *
  * 用 @huggingface/transformers (v3, JS 端) 在本地加载 `Xenova/all-MiniLM-L6-v2`（384 维），
- * 与 Python 端 sentence-transformers 同款模型，迁移后向量空间近似一致（ONNX vs PyTorch
- * 数值非逐位等同，但语义检索效果可用）。
+ * 本地 ONNX 推理，输出归一化稠密向量做余弦检索。
  *
  * **模型缓存目录**走 `settings.embeddingCacheDir`（默认项目内 `./models/`），
  * 首次启动会下载约 80MB；之后只从磁盘读。
@@ -24,7 +23,7 @@ const logger = getLogger("database.embedding");
 let _extractorPromise: Promise<FeatureExtractionPipeline> | null = null;
 
 /**
- * 加载 feature-extraction pipeline，单例缓存。对标 Python 端 `@lru_cache(maxsize=1)`。
+ * 加载 feature-extraction pipeline，单例缓存。
  */
 export function getEmbedderModel(): Promise<FeatureExtractionPipeline> {
   if (_extractorPromise !== null) {
@@ -42,7 +41,7 @@ export function getEmbedderModel(): Promise<FeatureExtractionPipeline> {
   logger.info(`[embedding] 加载 ${modelName}（缓存目录: ${path.relative(process.cwd(), settings.embeddingCacheDir) || "."}）`);
 
   _extractorPromise = pipeline("feature-extraction", modelName, {
-    // fp32 不量化，保证和 Python 端 384 维一致且数值接近
+    // fp32 不量化，保证 384 维向量数值精度
     dtype: "fp32",
   }) as Promise<FeatureExtractionPipeline>;
 

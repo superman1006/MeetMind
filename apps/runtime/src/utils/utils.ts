@@ -1,6 +1,6 @@
 /**
  * CLI 输出格式化工具，基于 chalk + boxen + cli-table3。
- * 还原 Python 端 rich 的 Panel / Table / 分隔线 / 系统提示效果。
+ * 提供 Panel / Table / 分隔线 / 系统提示等终端美化输出。
  */
 
 import { stat } from "node:fs/promises";

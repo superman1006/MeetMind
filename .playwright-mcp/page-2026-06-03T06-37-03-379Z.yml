@@ -1,0 +1,13 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]: 会话
+      - generic [ref=e7]:
+        - button "搜索会话" [ref=e9] [cursor=pointer]:
+          - img [ref=e10]
+        - button "收缩会话列表" [ref=e14] [cursor=pointer]:
+          - img [ref=e15]
+    - button "+ 新会话" [ref=e17] [cursor=pointer]
+    - list [ref=e18]
+    - button "☀️" [ref=e19] [cursor=pointer]
+  - generic [ref=e20]: 点击「+ 新会话」开始

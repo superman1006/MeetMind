@@ -10,11 +10,13 @@ withDefaults(
     confirmLabel?: string;
     cancelLabel?: string;
     danger?: boolean; // true 时确认键用红色(删除类操作)
+    hideCancel?: boolean; // true 时只留确认键,当纯提示弹窗用(如「会话已结束」)
   }>(),
   {
     confirmLabel: "确定",
     cancelLabel: "取消",
     danger: false,
+    hideCancel: false,
   },
 );
 
@@ -37,7 +39,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
       <h2 class="title">{{ title }}</h2>
       <p class="message">{{ message }}</p>
       <div class="actions">
-        <button class="btn cancel" @click="emit('cancel')">{{ cancelLabel }}</button>
+        <button v-if="!hideCancel" class="btn cancel" @click="emit('cancel')">{{ cancelLabel }}</button>
         <button class="btn confirm" :class="{ danger }" @click="emit('confirm')">
           {{ confirmLabel }}
         </button>

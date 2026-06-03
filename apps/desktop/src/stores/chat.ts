@@ -27,16 +27,20 @@ export interface StoredTurn {
 interface ChatState {
   bubblesBySession: Record<string, Bubble[]>;
   busyBySession: Record<string, boolean>;
+  // 已结束的会话(点「结束」后置位);纯前端内存,刷新/重启重置。
+  endedBySession: Record<string, boolean>;
 }
 
 export const useChatStore = defineStore("chat", {
   state: (): ChatState => ({
     bubblesBySession: {},
     busyBySession: {},
+    endedBySession: {},
   }),
   getters: {
     bubblesOf: (state) => (sessionId: string) => state.bubblesBySession[sessionId] ?? [],
     isBusy: (state) => (sessionId: string) => state.busyBySession[sessionId] ?? false,
+    isEnded: (state) => (sessionId: string) => state.endedBySession[sessionId] ?? false,
   },
   actions: {
     ensure(sessionId: string): void {
@@ -152,10 +156,23 @@ export const useChatStore = defineStore("chat", {
       }
       this.bubblesBySession[sessionId] = bubbles;
     },
+    /** 标记某会话已结束(点「结束」后);之后该会话的发送/结束会被拦截。后端会持久化,启动时由 hydrateEnded 回灌。 */
+    markEnded(sessionId: string): void {
+      this.endedBySession[sessionId] = true;
+    },
+    /** 启动时用后端会话列表回灌「已结束」状态,恢复持久化的会议锁定(刷新/重启后仍锁定)。 */
+    hydrateEnded(metas: { id: string; ended?: boolean }[]): void {
+      for (const m of metas) {
+        if (m.ended) {
+          this.endedBySession[m.id] = true;
+        }
+      }
+    },
     /** 丢弃某会话的本地气泡(删除会话时调)。 */
     drop(sessionId: string): void {
       delete this.bubblesBySession[sessionId];
       delete this.busyBySession[sessionId];
+      delete this.endedBySession[sessionId];
     },
     addErrorBubble(sessionId: string, message: string): void {
       this.ensure(sessionId);

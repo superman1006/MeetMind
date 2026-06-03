@@ -23,7 +23,7 @@ export interface Logger {
 
 type PinoLevel = "debug" | "info" | "warn" | "error";
 
-// 把 settings.logLevel（兼容 Python 端 "WARN"/"WARNING" 写法）转成 pino 级别名。
+// 把 settings.logLevel（兼容 "WARN"/"WARNING" 两种写法）转成 pino 级别名。
 function resolveLevel(): PinoLevel {
   const raw = getSettings().logLevel.toUpperCase();
   if (raw === "DEBUG") {

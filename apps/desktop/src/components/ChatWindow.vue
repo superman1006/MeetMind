@@ -2,18 +2,41 @@
 import { computed, ref, watch, nextTick } from "vue";
 import { useChatStore } from "../stores/chat.js";
 import type { StoredTurn } from "../stores/chat.js";
+import { useSessionsStore } from "../stores/sessions.js";
 import { rpc } from "../api/rpcClient.js";
 import { openEvents } from "../api/sseClient.js";
 import MessageBubble from "./MessageBubble.vue";
 import Composer from "./Composer.vue";
+import MeetingEndDialog from "./MeetingEndDialog.vue";
+import ConfirmDialog from "./ConfirmDialog.vue";
 import TypingDots from "./TypingDots.vue";
 
 const props = defineProps<{ sessionId: string }>();
 const chat = useChatStore();
+const sessions = useSessionsStore();
 
 const bubbles = computed(() => chat.bubblesOf(props.sessionId));
 const busy = computed(() => chat.isBusy(props.sessionId));
+const ended = computed(() => chat.isEnded(props.sessionId));
+// 顶部标题:在会话列表里按当前 sessionId 找标题(显式 for,house style)。
+const title = computed(() => {
+  for (const s of sessions.list) {
+    if (s.id === props.sessionId) {
+      return s.title;
+    }
+  }
+  return "";
+});
 const scroller = ref<HTMLElement | null>(null);
+// 「会话已结束」提示弹窗开关
+const endedNotice = ref(false);
+// 会议结束整理弹窗状态(单会话 demo,弹窗为全屏模态,整理中不能切会话,共用一个 ref 足够)。
+const summary = ref<{
+  open: boolean;
+  status: "summarizing" | "done" | "error";
+  message: string;
+  detail: string;
+}>({ open: false, status: "summarizing", message: "", detail: "" });
 
 // 尾部「思考中」占位:讨论进行中,且当前没有正在流式的空气泡时显示。
 // (空 agent 气泡自己会显示流动点;这里覆盖"刚发完还没 turn_start"和轮次间隙。)
@@ -48,6 +71,15 @@ function connect(sessionId: string): void {
     onTurnEnd: (p) => chat.endTurn(sessionId, p.turnId, p.used_rag),
     onRoundDone: () => chat.finishRound(sessionId),
     onError: (p) => chat.addErrorBubble(sessionId, p.message),
+    onSummaryDone: (p) => {
+      summary.value.status = "done";
+      summary.value.message = "会议纪要已生成";
+      summary.value.detail = p.file;
+    },
+    onSummaryError: (p) => {
+      summary.value.status = "error";
+      summary.value.message = p.message;
+    },
   });
 }
 
@@ -105,10 +137,34 @@ async function onInterrupt(): Promise<void> {
     chat.addErrorBubble(props.sessionId, String(e));
   }
 }
+
+// 结束会议:弹出整理中弹窗,调 chat.end;后续进度/结果由 SSE 的 summary_* 事件驱动弹窗更新。
+async function onEnd(): Promise<void> {
+  // 点结束即标记会话结束:此后该会话回车/点发送会被 Composer 拦截 → onBlocked 弹提示。
+  chat.markEnded(props.sessionId);
+  summary.value = {
+    open: true,
+    status: "summarizing",
+    message: "当前会议已结束,正在整理会议纪要",
+    detail: "",
+  };
+  try {
+    await rpc("chat.end", { sessionId: props.sessionId });
+  } catch (e) {
+    summary.value.status = "error";
+    summary.value.message = String(e);
+  }
+}
+
+// 已结束会话仍想发送:不真的发,弹「会话已结束」提示。
+function onBlocked(): void {
+  endedNotice.value = true;
+}
 </script>
 
 <template>
   <section class="chat">
+    <header class="chat-header">{{ title }}</header>
     <div ref="scroller" class="scroll">
       <MessageBubble v-for="b in bubbles" :key="b.turnId" :bubble="b" />
       <div v-if="showThinking" class="row">
@@ -118,14 +174,39 @@ async function onInterrupt(): Promise<void> {
         </div>
       </div>
     </div>
-    <Composer :busy="busy" @send="onSend" @interrupt="onInterrupt" />
+    <Composer
+      :busy="busy"
+      :ended="ended"
+      @send="onSend"
+      @interrupt="onInterrupt"
+      @end="onEnd"
+      @blocked="onBlocked"
+    />
+    <MeetingEndDialog
+      v-if="summary.open"
+      :status="summary.status"
+      :message="summary.message"
+      :detail="summary.detail"
+      @close="summary.open = false"
+    />
+    <ConfirmDialog
+      v-if="endedNotice"
+      title="会话已结束"
+      message="当前会话已结束，无法继续发送消息。"
+      confirm-label="知道了"
+      hide-cancel
+      @confirm="endedNotice = false"
+      @cancel="endedNotice = false"
+    />
   </section>
 </template>
 
 <style scoped>
 .chat { flex: 1; display: flex; flex-direction: column; height: 100vh; }
-.scroll { flex: 1; overflow-y: auto; padding: 16px; background: #fff; }
+/* 顶部会话标题栏(仿 Claude 桌面端):纤细、左对齐、底部分隔线 */
+.chat-header { padding: 12px 16px; font-size: 15px; font-weight: 600; color: var(--text-main); background: var(--bg-chat); border-bottom: 1px solid var(--border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 0; }
+.scroll { flex: 1; overflow-y: auto; padding: 16px; background: var(--bg-chat); }
 .row { display: flex; margin: 8px 0; }
-.thinking-bubble { display: inline-flex; align-items: center; gap: 8px; max-width: 72%; padding: 10px 12px; border-radius: 12px; background: #f3f4f6; color: #6b7280; }
+.thinking-bubble { display: inline-flex; align-items: center; gap: 8px; max-width: 72%; padding: 10px 12px; border-radius: 12px; background: var(--bg-elevated); color: var(--text-dim); }
 .thinking-label { font-size: 12px; }
 </style>

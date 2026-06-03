@@ -22,6 +22,7 @@ export interface SessionMeta {
   id: string;
   title: string;
   created_at: string;
+  ended: boolean;
 }
 
 /** sessions 表名。prefix 受控、是合法标识符，可安全内插。 */
@@ -44,9 +45,13 @@ export async function ensureChatTables(): Promise<void> {
     `CREATE TABLE IF NOT EXISTS ${sessions} (` +
     `  id TEXT PRIMARY KEY,` +
     `  title TEXT NOT NULL,` +
-    `  created_at TIMESTAMPTZ NOT NULL DEFAULT now()` +
+    `  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),` +
+    `  ended BOOLEAN NOT NULL DEFAULT false` +
     `)`;
   await pool.query(createSessionsSql);
+
+  // 兼容旧表:ended 列可能不存在,补上(幂等)
+  await pool.query(`ALTER TABLE ${sessions} ADD COLUMN IF NOT EXISTS ended BOOLEAN NOT NULL DEFAULT false`);
 
   const createMessagesSql =
     `CREATE TABLE IF NOT EXISTS ${messages} (` +
@@ -83,19 +88,20 @@ export async function createSession(title: string): Promise<SessionMeta> {
     `RETURNING id, title, created_at`;
   const result = await pool.query(insertSql, [id, title]);
   const row = result.rows[0];
-  return { id: row.id, title: row.title, created_at: String(row.created_at) };
+  // 新建会话必然未结束,ended 直接 false(DB 默认值也是 false)。
+  return { id: row.id, title: row.title, created_at: String(row.created_at), ended: false };
 }
 
 /** 列出所有会话，最近创建的在前。 */
 export async function listSessions(): Promise<SessionMeta[]> {
   const pool = getPgPool();
   const selectSql =
-    `SELECT id, title, created_at FROM ${sessionsTable()} ` +
+    `SELECT id, title, created_at, ended FROM ${sessionsTable()} ` +
     `ORDER BY created_at DESC`;
   const result = await pool.query(selectSql);
   const metas: SessionMeta[] = [];
   for (const row of result.rows) {
-    metas.push({ id: row.id, title: row.title, created_at: String(row.created_at) });
+    metas.push({ id: row.id, title: row.title, created_at: String(row.created_at), ended: row.ended === true });
   }
   return metas;
 }
@@ -164,6 +170,25 @@ export async function renameSession(sessionId: string, title: string): Promise<v
   const pool = getPgPool();
   const updateSql = `UPDATE ${sessionsTable()} SET title = $2 WHERE id = $1`;
   await pool.query(updateSql, [sessionId, title]);
+}
+
+/** 把某会话标记为已结束(点「结束」后持久化;此后服务端拒绝再发送/再结束)。未知 id 影响 0 行。 */
+export async function markSessionEnded(sessionId: string): Promise<void> {
+  const pool = getPgPool();
+  const updateSql = `UPDATE ${sessionsTable()} SET ended = true WHERE id = $1`;
+  await pool.query(updateSql, [sessionId]);
+}
+
+/** 查某会话是否已结束。未知 id(无此行)按未结束处理,返回 false。 */
+export async function isSessionEnded(sessionId: string): Promise<boolean> {
+  const pool = getPgPool();
+  const selectSql = `SELECT ended FROM ${sessionsTable()} WHERE id = $1`;
+  const result = await pool.query(selectSql, [sessionId]);
+  const row = result.rows[0];
+  if (!row) {
+    return false;
+  }
+  return row.ended === true;
 }
 
 /** 删除某会话；它的 messages 靠外键 ON DELETE CASCADE 一并删除。 */

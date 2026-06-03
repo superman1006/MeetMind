@@ -1,6 +1,6 @@
 /**
  * 基于 zod 的应用配置，从环境变量 / .env 加载。
- * 对标 Python 端 pydantic-settings 的 Settings，含相对路径锚定到 PROJECT_ROOT 的逻辑。
+ * 含相对路径锚定到 PROJECT_ROOT 的逻辑。
  */
 
 import path from "node:path";
@@ -20,7 +20,6 @@ loadDotenv({ path: path.join(PROJECT_ROOT, ".env") });
 
 /**
  * 把相对路径解析为相对 PROJECT_ROOT 的绝对路径。
- * 对标 Python 端 `@field_validator("seed_data_path", "embedding_cache_dir", mode="after")`。
  */
 function resolveRel(p: string): string {
   if (path.isAbsolute(p)) {
@@ -78,7 +77,7 @@ export type Settings = z.infer<typeof SettingsSchema>;
 let _cached: Settings | null = null;
 
 /**
- * 单例配置访问器。对标 Python 端 `@lru_cache(maxsize=1)` + `get_settings()`。
+ * 单例配置访问器（首次 parse 后缓存复用）。
  */
 export function getSettings(): Settings {
   if (_cached !== null) {

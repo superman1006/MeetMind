@@ -1,0 +1,25 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]: 会话
+      - button "«" [ref=e7] [cursor=pointer]
+    - button "+ 新会话" [ref=e8] [cursor=pointer]
+    - list [ref=e9]:
+      - listitem [ref=e10] [cursor=pointer]:
+        - textbox [active] [ref=e34]: 会话 2
+      - listitem [ref=e12] [cursor=pointer]:
+        - generic [ref=e13]: 会话 1
+  - generic [ref=e14]:
+    - generic [ref=e15]:
+      - generic [ref=e17]:
+        - generic [ref=e19]: 用户
+        - generic [ref=e20]: 你好
+        - time [ref=e21]: 2026-6-2 11:53
+      - generic [ref=e23]:
+        - generic [ref=e25]: 架构师（项目老大）
+        - generic [ref=e26]: 你好！有什么可以帮你的吗？
+        - time [ref=e27]: 2026-6-2 11:53
+    - generic [ref=e28]:
+      - textbox "输入项目需求… (Enter 发送, Shift+Enter 换行)" [ref=e29]
+      - button "发送" [ref=e30] [cursor=pointer]:
+        - generic [ref=e31]: 发送

@@ -4,6 +4,8 @@ import type { buildGraph } from "../graph/builder.js";
 import { runDiscussion } from "./runDiscussion.js";
 import * as sessions from "./sessions.js";
 import * as chatStore from "../database/chatStore.js";
+import * as sse from "./sse.js";
+import { summarizeMeeting } from "./meetingSummary.js";
 
 // 一条进来的 JSON-RPC 请求的形状(和前端 rpcClient 发的一一对应)。
 export interface RpcRequest {
@@ -40,13 +42,17 @@ export async function handleRpc(graph: CompiledGraph, body: RpcRequest) {
     if (typeof sessionId !== "string" || typeof requirement !== "string" || !sessionId || !requirement) {
       return rpcError(id, -32602, "缺少 sessionId 或 requirement");
     }
+    // 会议已结束(持久化在 DB)→ 拒绝继续讨论。前端已拦,这里是服务端兜底。
+    if (await chatStore.isSessionEnded(sessionId)) {
+      return rpcError(id, -32000, "会议已结束,无法继续讨论");
+    }
     // 同一会话一次只能跑一轮,正在跑就拒绝。
     if (sessions.isBusy(sessionId)) {
       return rpcError(id, -32000, "上一轮讨论还在进行");
     }
     sessions.setBusy(sessionId, true);
 
-    // AbortController 是个“紧急停止”开关,signal 透传给 graph.stream;之后 chat.interrupt 靠它叫停本轮。
+    // AbortController 是个"紧急停止"开关,signal 透传给 graph.stream;之后 chat.interrupt 靠它叫停本轮。
     const controller = new AbortController();
     sessions.setController(sessionId, controller);
 
@@ -71,7 +77,7 @@ export async function handleRpc(graph: CompiledGraph, body: RpcRequest) {
     if (typeof sessionId !== "string" || !sessionId) {
       return rpcError(id, -32602, "缺少 sessionId");
     }
-    // 按下“紧急停止”:abort() 会让 graph.stream 抛错,runDiscussion 捕获后丢弃本轮;没有进行中的讨论也照样回 ok(幂等)。
+    // 按下"紧急停止":abort() 会让 graph.stream 抛错,runDiscussion 捕获后丢弃本轮;没有进行中的讨论也照样回 ok(幂等)。
     const controller = sessions.getController(sessionId);
     if (controller) {
       controller.abort();
@@ -79,7 +85,38 @@ export async function handleRpc(graph: CompiledGraph, body: RpcRequest) {
     return rpcOk(id, { ok: true });
   }
 
-  // session.create:新建会话。没给标题就用默认名“新会话”。然后返回
+  // chat.end:结束会议——立即返回,后台让各 agent 整理会议纪要(仿 chat.send 不 await)。
+  if (body.method === "chat.end") {
+    const sessionId = params.sessionId;
+    if (typeof sessionId !== "string" || !sessionId) {
+      return rpcError(id, -32602, "缺少 sessionId");
+    }
+    // 一个会话 = 一个会议:已结束就不能再次结束/整理(状态持久化在 DB)。
+    if (await chatStore.isSessionEnded(sessionId)) {
+      return rpcError(id, -32000, "会议已结束,无法再次结束");
+    }
+    // 仅空闲时可结束;讨论进行中先打断再结束(服务端兜底,前端按钮也已置灰)。
+    if (sessions.isBusy(sessionId)) {
+      return rpcError(id, -32000, "讨论进行中,无法结束会议,请先打断");
+    }
+    // 先持久化「已结束」,从此该会话锁定(刷新/重启后依然拒绝再发送/再结束)。
+    await chatStore.markSessionEnded(sessionId);
+    // 上锁,防止整理期间又被 chat.send / 再次 chat.end 插入。
+    sessions.setBusy(sessionId, true);
+    // 不 await:整理很慢(6 次 LLM),HTTP 立即回 ok,进度/结果走 SSE。
+    const running = summarizeMeeting(sessionId);
+    running
+      .catch((exc) => {
+        console.error(`[rpc] summarizeMeeting 未捕获异常 (会话 ${sessionId}):`, exc);
+        sse.send(sessionId, "summary_error", { message: String(exc) });
+      })
+      .finally(() => {
+        sessions.setBusy(sessionId, false);
+      });
+    return rpcOk(id, { ok: true });
+  }
+
+  // session.create:新建会话。没给标题就用默认名"新会话"。然后返回
   if (body.method === "session.create") {
     const rawTitle = params.title;
     const title = (typeof rawTitle === "string" && rawTitle) ? rawTitle : "新会话";

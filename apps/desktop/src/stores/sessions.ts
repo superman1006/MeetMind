@@ -1,7 +1,7 @@
 import { defineStore } from "pinia";
 import { rpc } from "../api/rpcClient.js";
 
-export interface SessionMeta { id: string; title: string; created_at?: string }
+export interface SessionMeta { id: string; title: string; created_at?: string; ended?: boolean }
 
 export const useSessionsStore = defineStore("sessions", {
   state: () => ({

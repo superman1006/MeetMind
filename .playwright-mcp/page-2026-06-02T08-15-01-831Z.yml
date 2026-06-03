@@ -1,0 +1,39 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]: 会话
+      - button "«" [ref=e7] [cursor=pointer]
+    - button "+ 新会话" [ref=e8] [cursor=pointer]
+    - list [ref=e9]:
+      - listitem [ref=e10] [cursor=pointer]:
+        - generic [ref=e11]: 会话 4
+      - listitem [ref=e12] [cursor=pointer]:
+        - generic [ref=e13]: 会话 3
+      - listitem [ref=e14] [cursor=pointer]:
+        - generic [ref=e15]: 会话 2
+      - listitem [ref=e16] [cursor=pointer]:
+        - generic [ref=e17]: "22222222"
+  - generic [ref=e18]:
+    - generic [ref=e19]:
+      - generic [ref=e21]:
+        - generic [ref=e23]: 用户
+        - generic [ref=e24]: 2025年的英雄联盟全球总决赛的冠军是谁
+        - time [ref=e25]: 2026-6-2 16:07
+      - generic [ref=e27]:
+        - generic [ref=e29]: 架构师（项目老大）
+        - generic [ref=e30]: 这是2025年的赛事，目前还没有结果，我无法预测未来赛事的冠军。
+        - time [ref=e31]: 2026-6-2 16:07
+      - generic [ref=e33]:
+        - generic [ref=e35]: 用户
+        - generic [ref=e36]: 那你不会用网页搜索工具查询吗
+        - time [ref=e37]: 2026-6-2 16:10
+      - generic [ref=e39]:
+        - generic [ref=e40]:
+          - generic [ref=e41]: 架构师（项目老大）
+          - generic "调用了工具 web_search" [ref=e42]: "UsingTools: web_search"
+        - generic [ref=e43]: 2025英雄联盟全球总决赛冠军是T1，3-2击败KT，完成队史第六冠及S赛三连冠，FMVP是Gumayusi。
+        - time [ref=e44]: 2026-6-2 16:10
+    - generic [ref=e45]:
+      - textbox "输入项目需求… (Enter 发送, Shift+Enter 换行)" [ref=e46]
+      - button "发送" [ref=e47] [cursor=pointer]:
+        - generic [ref=e48]: 发送
