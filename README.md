@@ -143,7 +143,14 @@ pnpm build && pnpm start:prod
 - 旧 CLI（保留，不再是默认入口）：`pnpm dev:cli`
 - 桌面外壳（需先装 Rust）：`pnpm --filter @meetmind/desktop tauri dev`
 
-后端 3002 暴露 `POST /api`（JSON-RPC：`chat.send` / `session.reset`）与 `GET /events?sessionId=…`（SSE：`turn_start`/`delta`/`turn_end`/`round_done`/`error`）。会话不持久化，前端刷新即清空。
+后端 3002 暴露 `POST /api`（JSON-RPC）与 `GET /events?sessionId=…`（SSE）：
+
+- **JSON-RPC method**：`chat.send`（开一轮讨论，后台跑、立即返回，过程走 SSE）、`chat.interrupt`（打断本轮，abort 后丢弃不落库）、`session.create` / `session.list` / `session.messages` / `session.rename` / `session.delete`。
+- **SSE 事件**：`turn_start` / `delta` / `using_tools` / `turn_end` / `round_done` / `error`。
+- **会话与消息持久化在 PostgreSQL**（`<prefix>_sessions` / `<prefix>_messages` 两张表），刷新/重开会话会从 DB 还原历史；删除会话级联删消息。
+- **消息时间戳**：每条气泡下方显示发送时间（`2026-6-2 18:23`）。**纯前端展示**——live 消息用浏览器当前时间，历史消息用 DB `messages.created_at`（该列由 `DEFAULT now()` 自动生成，app 不额外写入）。
+
+> ⚠️ runtime 用 `tsx` 启动、不 watch：改了服务端代码（尤其 `server/rpc.ts` 新增 method）后要**重启 runtime**，否则前端调新 method 会收到 `未知方法: xxx`。
 
 ---
 

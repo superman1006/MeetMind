@@ -79,6 +79,9 @@ export interface AgentResponse {
   used_rag: boolean;
   // 本轮用过的工具名(去重、", "连接);没用工具则为空串/缺省。用于前端常驻 UsingTools 标签。
   tool?: string;
+  // 这条消息在 DB 里的写入时间(只读,仅 getMessages 回填给前端展示发送时间);
+  // 不参与 LLM,也不由 appendMessages 写入(写入时间由 DB 列 DEFAULT now() 自动生成)。
+  created_at?: string;
 }
 
 export abstract class BaseAgent {

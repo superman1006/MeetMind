@@ -4,7 +4,9 @@
   "description": "Multi-agent RAG collaboration system (monorepo: runtime + desktop)",
   "type": "module",
   "private": true,
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "pnpm --parallel --filter \"./apps/*\" dev",
     "dev:runtime": "pnpm --filter @meetmind/runtime dev",
@@ -13,5 +15,11 @@
     "typecheck": "pnpm -r typecheck",
     "build": "pnpm -r build",
     "test": "pnpm -r test"
+  },
+  "dependencies": {
+    "pino": "^10.3.1"
+  },
+  "devDependencies": {
+    "pino-pretty": "^13.1.3"
   }
 }

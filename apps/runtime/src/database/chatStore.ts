@@ -104,7 +104,7 @@ export async function listSessions(): Promise<SessionMeta[]> {
 export async function getMessages(sessionId: string): Promise<AgentResponse[]> {
   const pool = getPgPool();
   const selectSql =
-    `SELECT agent_name, role, message, next_agent, done, used_rag, tool ` +
+    `SELECT agent_name, role, message, next_agent, done, used_rag, tool, created_at ` +
     `FROM ${messagesTable()} WHERE session_id = $1 ORDER BY seq ASC`;
   const result = await pool.query(selectSql, [sessionId]);
   const turns: AgentResponse[] = [];
@@ -117,6 +117,7 @@ export async function getMessages(sessionId: string): Promise<AgentResponse[]> {
       done: row.done,
       used_rag: row.used_rag,
       tool: row.tool ?? "",
+      created_at: String(row.created_at),
     });
   }
   return turns;

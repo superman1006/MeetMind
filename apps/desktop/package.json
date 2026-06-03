@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "pinia": "^2.2.0",
+    "pino": "^10.3.1",
     "vue": "^3.5.0"
   },
   "devDependencies": {

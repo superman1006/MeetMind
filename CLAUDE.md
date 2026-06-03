@@ -89,12 +89,16 @@ src/index.ts (load dotenv) → cli/main.ts:main() → [printAppBanner / bootstra
 | PostgreSQL 连接池 / 表 | `getPgPool()` / `ensureExtensions()` / `ensureAgentTable(agent)` / `countDocs(agent)` / `deleteAgentTable(agent)` | 表名由 `getTableName(agent)` → `<prefix>_<agent>`（ES 时代是 `getEsClient` / `ensureAgentIndex` / `getIndexName`） |
 | CLI 复盘 / 输出 | `printRoundReview(state)` / `printAgentInfo(...)` | 不是 `formatAgentOutput()` |
 | State 完成字段 | `state.done` | 不是 `complete` |
+| 消息发送时间 | 后端 `AgentResponse.created_at`（只读）/ 前端 `Bubble.createdAt`（epoch 毫秒） | 仅前端展示发送时间。`created_at` 只由 `getMessages` 回填（DB 列 `DEFAULT now()` 自动生成），**不由 `appendMessages` 写、不进 LLM**；前端 live 气泡用 `Date.now()`、历史气泡用 DB `created_at`，`MessageBubble` 格式化成 `2026-6-2 18:23` |
 | 结构化输出 schema | `ModelOutputSchema` / `ModelOutput` | zod schema + 推导类型 |
 
 写注释优先用中文，符合现有风格。
 
 ## 容易踩的坑
 
+- **runtime 用 tsx 起、不 watch**：`apps/runtime` 的 `pnpm dev` = `tsx src/index.ts`，**改了服务端代码（尤其 `server/rpc.ts` 新增 method）后必须重启 runtime 进程**，否则前端调新 method 会收到 `未知方法: xxx`。「会话重命名失效」一类问题先怀疑这个——老进程跑旧代码，非代码 bug。前端 `apps/desktop` 走 vite，有 HMR 不用重启。
+- **复现前端 bug 的最短路**：`pnpm dev:runtime`(3002) + `pnpm dev:desktop`(5173)，vite 把 `/api`、`/events` 代理到 3002；用浏览器（Playwright 连 5173）实操，比起 Tauri 外壳快。改完别忘按上一条重启 runtime。
+- **本轮结束要清空气泡**：`apps/desktop` 的 `chat` store `finishRound` 会 `pop` 掉末尾「已建但没吐出任何字」的 agent 占位气泡（`!isUser && text===""`），否则它会被 `MessageBubble.thinking` 判定为思考中、`TypingDots` 一直跳停不下来；被打断的本轮不落库，删掉正合适。
 - **进程入口顺序**：`src/index.ts` 必须先 `config()`（dotenv）再动态 `import("./cli/main.js")`，因为 LangSmith 等 SDK 在 import 时就读 `process.env`。另外 `settings.ts` 在 import 期也会自行 `loadDotenv`，所以单独 import 模块跑脚本（如 reset）时也能读到 .env。
 - **import 路径要带 `.js` 后缀**：项目是 ESM + NodeNext，所有相对 import 写成 `./foo.js`（即便源文件是 `foo.ts`）。这是 TS 在 NodeNext 下的硬要求，不是笔误。
 - **stdin 编码**：`cli/main.ts` 里 `process.stdin.setEncoding("utf8")` + `BaseAgent.invoke` 里的 `cleanBadChars` 是两道防线，避免中文输入产生孤立 UTF-16 surrogate 导致下游 HTTP 客户端序列化崩。两者都要保留。

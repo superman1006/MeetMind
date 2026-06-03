@@ -33,12 +33,14 @@ const showThinking = computed(() => {
 let es: EventSource | null = null;
 function connect(sessionId: string): void {
   if (es) {
+    // 把
     es.close();
     es = null;
   }
   if (!sessionId) {
     return;
   }
+  // 创建 SSE事件流管道，监听后端事件，更新状态
   es = openEvents(sessionId, {
     onTurnStart: (p) => chat.startTurn(sessionId, p.turnId, p.agent_name, p.role),
     onDelta: (p) => chat.appendDelta(sessionId, p.turnId, p.text),
@@ -62,6 +64,7 @@ async function loadHistory(sessionId: string): Promise<void> {
   }
 }
 
+// watch 是 Vue 3 的响应式 API：盯着某个会变的值props.sessionId，一变就执行你写的回调
 watch(
   () => props.sessionId,
   (id) => {
@@ -83,9 +86,11 @@ watch(
   },
 );
 
+
 async function onSend(text: string): Promise<void> {
   chat.addUser(props.sessionId, text);
   try {
+    //调用 rpcClient 发送POST 请求 需要调用的方法是 chat.send
     await rpc("chat.send", { sessionId: props.sessionId, requirement: text });
   } catch (e) {
     chat.addErrorBubble(props.sessionId, String(e));
