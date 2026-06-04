@@ -1,0 +1,17 @@
+每一个 agent 有
+1.LLM模型
+2.Tools[] 工具  (所有 agent 共享同一套工具，用 langchain 的 tool()实现)
+    2.1本地 function-calling
+    2.2MCP 工具
+3.RAG retriever
+4.seed 文件
+    [md,pdf,word,json,...]
+5.PostgreSQL 中的一个数据库表meetmind_xx
+    [id,content,metadata,embedding]
+6.agent的输出 AgentResponse
+    [agent 名,role,message,next,done,rag?,用过的工具，工具调用明细，DB 写入时间]
+
+
+
+所有 agent 共享一个 AgentState (用Annotation.Root实现)
+    [requirement,AgentResponse[],next_agent,done,iteration]

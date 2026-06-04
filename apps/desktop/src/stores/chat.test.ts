@@ -1,7 +1,25 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { setActivePinia, createPinia } from "pinia";
 
-import { useChatStore } from "./chat.js";
+import { useChatStore, shouldShowTailThinking, type Bubble } from "./chat.js";
+
+// 造一个气泡用于纯函数测试;只关心 isUser / text / turnEnded 三个字段,其余给默认值。
+function mkBubble(over: Partial<Bubble>): Bubble {
+  return {
+    turnId: "t",
+    agent_name: "backend",
+    role: "后端",
+    text: "",
+    isUser: false,
+    done: false,
+    used_rag: false,
+    tool: "",
+    toolCalls: [],
+    createdAt: 0,
+    turnEnded: false,
+    ...over,
+  };
+}
 
 beforeEach(() => {
   setActivePinia(createPinia());
@@ -117,5 +135,64 @@ describe("chat store — 历史 / 结束 / 丢弃", () => {
     const bubbles = chat.bubblesOf("s1");
     expect(bubbles[bubbles.length - 1].text).toContain("出错了");
     expect(chat.isBusy("s1")).toBe(false);
+  });
+});
+
+describe("chat store — turnEnded 标记", () => {
+  it("startTurn 建的气泡 turnEnded=false,endTurn 后置 true", () => {
+    const chat = useChatStore();
+    chat.startTurn("s1", "t1", "backend", "后端");
+    expect(chat.bubblesOf("s1")[0].turnEnded).toBe(false);
+    chat.endTurn("s1", "t1", false);
+    expect(chat.bubblesOf("s1")[0].turnEnded).toBe(true);
+  });
+
+  it("appendDelta 不改变 turnEnded(流式中仍是未结束)", () => {
+    const chat = useChatStore();
+    chat.startTurn("s1", "t1", "backend", "后端");
+    chat.appendDelta("s1", "t1", "正在输出");
+    expect(chat.bubblesOf("s1")[0].turnEnded).toBe(false);
+  });
+
+  it("用户泡 / 历史泡默认 turnEnded=true(已落定)", () => {
+    const chat = useChatStore();
+    chat.addUser("s1", "需求");
+    expect(chat.bubblesOf("s1")[0].turnEnded).toBe(true);
+    chat.load("s2", [
+      { agent_name: "backend", role: "后端", message: "答", next_agent: "architect", done: false, used_rag: false, tool: "" },
+    ]);
+    expect(chat.bubblesOf("s2")[0].turnEnded).toBe(true);
+  });
+});
+
+describe("shouldShowTailThinking — 尾部「思考中」显示规则", () => {
+  it("不 busy 时永远不显示", () => {
+    expect(shouldShowTailThinking(false, [])).toBe(false);
+    expect(shouldShowTailThinking(false, [mkBubble({ isUser: true, text: "x", turnEnded: true })])).toBe(false);
+  });
+
+  it("busy 且无气泡 → 显示(刚连上还没任何泡)", () => {
+    expect(shouldShowTailThinking(true, [])).toBe(true);
+  });
+
+  it("用户刚发完、还没 turn_start → 显示", () => {
+    const bubbles = [mkBubble({ isUser: true, text: "需求", turnEnded: true })];
+    expect(shouldShowTailThinking(true, bubbles)).toBe(true);
+  });
+
+  it("上一个 agent 已结束、等下一个 turn_start(轮次间隙) → 显示", () => {
+    const bubbles = [mkBubble({ isUser: false, text: "上轮回答", turnEnded: true })];
+    expect(shouldShowTailThinking(true, bubbles)).toBe(true);
+  });
+
+  it("agent 已 turn_start 但还没吐字(Phase 1 思考) → 不显示(空泡自己有流动点)", () => {
+    const bubbles = [mkBubble({ isUser: false, text: "", turnEnded: false })];
+    expect(shouldShowTailThinking(true, bubbles)).toBe(false);
+  });
+
+  // 这条是本次 bug 的核心:agent 正在流式输出(有字、turn_end 未到)时,尾部「思考中」绝不能出现。
+  it("agent 正在流式输出(有字、本轮未结束) → 不显示", () => {
+    const bubbles = [mkBubble({ isUser: false, text: "正在边想边写", turnEnded: false })];
+    expect(shouldShowTailThinking(true, bubbles)).toBe(false);
   });
 });

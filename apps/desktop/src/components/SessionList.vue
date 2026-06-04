@@ -88,6 +88,7 @@ async function confirmDelete(): Promise<void> {
   try {
     await sessions.remove(target.id);
     chat.drop(target.id);
+    ui.showToast("会话已删除");
   } catch (e) {
     console.error("[SessionList] 删除失败:", e);
   }

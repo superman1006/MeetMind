@@ -25,7 +25,7 @@ pnpm start:prod                        # node dist/index.js
 pnpm typecheck                         # tsc --noEmit，只做类型检查
 
 # 重置某个 agent 的 PostgreSQL 表并重灌（开发时常用）
-pnpm exec tsx -e "import('./src/database/initializer.ts').then(m => m.resetAgentDb('backend'))"
+pnpm exec tsx -e "import('./src/database/ingestion/initializer.ts').then(m => m.resetAgentDb('backend'))"
 
 # 完全抹库后重灌（删 docker volume，下次启动重新建表 + 灌种子）
 docker compose down -v && docker compose up -d
@@ -72,25 +72,25 @@ src/index.ts (load dotenv) → cli/main.ts:main() → [printAppBanner / bootstra
 
 仓库主人保留了一些**有意为之**的命名，遇到时请遵循，不要自动重命名：
 
-| 项 | 当前命名 | 备注 |
-|---|---|---|
-| `BaseAgent` 实例上的 RAG 引用 | `this.RAGRetriever` | 刻意 PascalCase，不是 `this.ragRetriever` |
-| State / 响应字段 | `next_agent` / `agent_name` / `used_rag` / `done` | 刻意 snake_case，会序列化进 LangGraph state，统一用 snake_case 不混 camelCase |
-| 历史条目类型 | `AgentResponse`（`base.ts`） | **没有单独的 `MessageTurn`**：`AgentState.messages` 直接存 `AgentResponse[]`，`createNode` 把整条 `response` push 进去 |
-| 图节点名 | `` `${name}_node` `` | snake_case 后缀，如 `architect_node` |
-| BaseAgent prompt 拼装 | `_userPrompt(requirement, history)` / `_routingPrompt()` | 不是 `_buildUserPrompt` / `_routingInstructions` |
-| BaseAgent 主方法 | `invoke(requirement, conversationHistory)` | 不是 `process()` |
-| 路由 / 收尾解析 | `_buildAgentResponse(output)` | 结构化输出后构造 AgentResponse；**没有** `_getNextAgent` / `_parseRouting`（旧正则方案已删） |
-| 字符清理 | `cleanBadChars(text)` | 模块级导出函数 |
-| RAG 检索器 | `RAGRetriever.restart()` / `.retrieve()` / `getRetriever(name)` | 不是 `resetTracking()`；直接查 PostgreSQL，不需要 `markDirty()`。每 agent 一个实例由 `rag_retriever.getRetriever(name)` 缓存；包成 LangChain Tool 的逻辑在 `src/tools/ragSearchTool.ts`（`ragSearchTool` 单例），`RAGRetriever` 上不再有 `getTool()` |
-| 工具 / 登记表 | `src/tools/*Tool.ts` 直接 `export const xxxTool = tool(...)` / `toolRegistry.ts` 导出 `ToolRegister` 类，`allTools` 在 `base.ts` 里 `register()` 拼出 | 工具是单例，不是工厂；没有 `ToolContext`/`types.ts`。RAG 用 `config.configurable.agentName` 在调用时区分 agent，检索器走 `rag_retriever.getRetriever(name)` 缓存 |
-| Initializer 私函数 | `loadSeedsToPg` / `getSeedsContent` / `generateDocId` / `getExistingIds` | 单 agent 灌库入口是 `loadSeedsToPg`（ES 时代叫 `loadSeedsToEs`），不是 `_populateOneAgent` |
-| Initializer 入口 / 重置 | `buildAgentsTables()` / `resetAgentDb(agent)` | 给所有 agent 建 PostgreSQL 表 + 灌种子 |
-| PostgreSQL 连接池 / 表 | `getPgPool()` / `ensureExtensions()` / `ensureAgentTable(agent)` / `countDocs(agent)` / `deleteAgentTable(agent)` | 表名由 `getTableName(agent)` → `<prefix>_<agent>`（ES 时代是 `getEsClient` / `ensureAgentIndex` / `getIndexName`） |
-| CLI 复盘 / 输出 | `printRoundReview(state)` / `printAgentInfo(...)` | 不是 `formatAgentOutput()` |
-| State 完成字段 | `state.done` | 不是 `complete` |
-| 消息发送时间 | 后端 `AgentResponse.created_at`（只读）/ 前端 `Bubble.createdAt`（epoch 毫秒） | 仅前端展示发送时间。`created_at` 只由 `getMessages` 回填（DB 列 `DEFAULT now()` 自动生成），**不由 `appendMessages` 写、不进 LLM**；前端 live 气泡用 `Date.now()`、历史气泡用 DB `created_at`，`MessageBubble` 格式化成 `2026-6-2 18:23` |
-| 结构化输出 schema | `ModelOutputSchema` / `ModelOutput` | zod schema + 推导类型 |
+| 项                       | 当前命名                                                                                                                                        | 备注                                                                                                                                                                                                                |
+|-------------------------|---------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `BaseAgent` 实例上的 RAG 引用 | `this.RAGRetriever`                                                                                                                         | 刻意 PascalCase，不是 `this.ragRetriever`                                                                                                                                                                              |
+| State / 响应字段            | `next_agent` / `agent_name` / `used_rag` / `done`                                                                                           | 刻意 snake_case，会序列化进 LangGraph state，统一用 snake_case 不混 camelCase                                                                                                                                                   |
+| 历史条目类型                  | `AgentResponse`（`base.ts`）                                                                                                                  | `AgentState.messages` 直接存 `AgentResponse[]`，`createNode` 把整条 `response` push 进去                                                                                                                                   |
+| 图节点名                    | `` `${name}_node` ``                                                                                                                        | snake_case 后缀，如 `architect_node`                                                                                                                                                                                  |
+| BaseAgent prompt 拼装     | `_userPrompt(requirement, history)` / `_routingPrompt()`                                                                                    | 不是 `_buildUserPrompt` / `_routingInstructions`                                                                                                                                                                    |
+| BaseAgent 主方法           | `invoke(requirement, conversationHistory)`                                                                                                  | 不是 `process()`                                                                                                                                                                                                    |
+| 路由 / 收尾解析               | `_buildAgentResponse(output)`                                                                                                               | 结构化输出后构造 AgentResponse；**没有** `_getNextAgent` / `_parseRouting`（旧正则方案已删）                                                                                                                                          |
+| 字符清理                    | `cleanBadChars(text)`                                                                                                                       | 模块级导出函数                                                                                                                                                                                                           |
+| RAG 检索器                 | `RAGRetriever.restart()` / `.retrieve()` / `getRetriever(name)`                                                                             | 不是 `resetTracking()`；直接查 PostgreSQL，不需要 `markDirty()`。每 agent 一个实例由 `rag_retriever.getRetriever(name)` 缓存；包成 LangChain Tool 的逻辑在 `src/tools/ragSearchTool.ts`（`ragSearchTool` 单例），`RAGRetriever` 上不再有 `getTool()` |
+| 工具 / 登记表                | `src/tools/*Tool.ts` 直接 `export const xxxTool = tool(...)` / `toolRegistry.ts` 导出 `ToolRegister` 类，`allTools` 在 `base.ts` 里 `register()` 拼出 | 工具是单例，不是工厂；没有 `ToolContext`/`types.ts`。RAG 用 `config.configurable.agentName` 在调用时区分 agent，检索器走 `rag_retriever.getRetriever(name)` 缓存                                                                              |
+| Initializer 私函数         | `loadSeedsToPg` / `getSeedsContent` / `generateDocId` / `getExistingIds`                                                                    | 单 agent 灌库入口是 `loadSeedsToPg`（ES 时代叫 `loadSeedsToEs`），不是 `_populateOneAgent`                                                                                                                                      |
+| Initializer 入口 / 重置     | `buildAgentsTables()` / `resetAgentDb(agent)`                                                                                               | 给所有 agent 建 PostgreSQL 表 + 灌种子                                                                                                                                                                                    |
+| PostgreSQL 连接池 / 表      | `getPgPool()` / `ensureExtensions()` / `ensureAgentTable(agent)` / `countDocs(agent)` / `deleteAgentTable(agent)`                           | 表名由 `getTableName(agent)` → `<prefix>_<agent>`（ES 时代是 `getEsClient` / `ensureAgentIndex` / `getIndexName`）                                                                                                        |
+| CLI 复盘 / 输出             | `printRoundReview(state)` / `printAgentInfo(...)`                                                                                           | 不是 `formatAgentOutput()`                                                                                                                                                                                          |
+| State 完成字段              | `state.done`                                                                                                                                | 不是 `complete`                                                                                                                                                                                                     |
+| 消息发送时间                  | 后端 `AgentResponse.created_at`（只读）/ 前端 `Bubble.createdAt`（epoch 毫秒）                                                                          | 仅前端展示发送时间。`created_at` 只由 `getMessages` 回填（DB 列 `DEFAULT now()` 自动生成），**不由 `appendMessages` 写、不进 LLM**；前端 live 气泡用 `Date.now()`、历史气泡用 DB `created_at`，`MessageBubble` 格式化成 `2026-6-2 18:23`                       |
+| 结构化输出 schema            | `ModelOutputSchema` / `ModelOutput`                                                                                                         | zod schema + 推导类型                                                                                                                                                                                                 |
 
 写注释优先用中文，符合现有风格。
 

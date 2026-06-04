@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { runDiscussion } from "./runDiscussion.js";
-import * as sse from "./sse.js";
-import * as chatStore from "../database/chatStore.js";
+import * as sse from "./sseServer.js";
+import * as chatStore from "../database/chat/chatStore.js";
 import type { AgentResponse } from "../agents/base.js";
 
 function archTurn(message: string): AgentResponse {

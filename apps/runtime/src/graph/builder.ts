@@ -12,7 +12,7 @@ import { END, START, StateGraph } from "@langchain/langgraph";
 import type { LangGraphRunnableConfig } from "@langchain/langgraph";
 
 import { ArchitectAgent } from "../agents/architect.js";
-import type { AgentResponse, BaseAgent } from "../agents/base.js";
+import type { AgentResponse, BaseAgent, ToolCallRecord } from "../agents/base.js";
 import { BackendAgent } from "../agents/backend.js";
 import { FrontendAgent } from "../agents/frontend.js";
 import { PMAgent } from "../agents/pm.js";
@@ -81,6 +81,8 @@ function createNode(agent: BaseAgent) {
     let onDelta: ((text: string) => void) | undefined = undefined;
     // onToolUse:在 Phase 1 真正执行某个工具之前调一次，参数是工具名（如 rag_search、web_search）。
     let onToolUse: ((toolName: string) => void) | undefined = undefined;
+    // onToolResult:每次工具执行完成后调一次，带 name/args/result，转发成 tool_result 事件供前端加按钮 + 展开结果。
+    let onToolResult: ((rec: ToolCallRecord) => void) | undefined = undefined;
     const toolsUsed: string[] = []; // 本轮用过的工具名(去重),用于落库 + 前端常驻标签
     if (writer) {
       onDelta = (text: string) => {
@@ -92,11 +94,20 @@ function createNode(agent: BaseAgent) {
           toolsUsed.push(toolName);
         }
       };
+      onToolResult = (rec: ToolCallRecord) => {
+        writer({
+          kind: "tool_result",
+          turnId,
+          name: rec.name,
+          args: rec.args,
+          result: rec.result,
+        });
+      };
     }
 
     let response;
     if (onDelta) {
-      response = await agent.invoke(requirement, history, { onDelta, onToolUse });
+      response = await agent.invoke(requirement, history, { onDelta, onToolUse, onToolResult });
     } else {
       response = await agent.invoke(requirement, history);
     }

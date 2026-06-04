@@ -1,0 +1,19 @@
+流程：
+    打开一个网页窗口 后:
+    1.前端的new EventSource(url) ==> 发送GET请求 + /events 到 runtime:3002
+    2.然后 runtime 中 httpserver.listen 收到请求后,会创建一个 ServerResponse sse响应对象,
+        还会 把它加进 Set中、并且不调 res.end()（保持长连不关），后面 send() 才能一直往里写
+    3.前端给 es 添加多个监听器后, 监测 runtime  send()发来的消息
+
+
+逻辑:
+    浏览器窗口 A(EventSource对象 es) <===============> runtime 中 sseServer 中的 Set 中的 ServerResponse对象A  <==\\
+    浏览器窗口 B(EventSource对象 es) <===============> runtime 中 sseServer 中的 Set 中的 ServerResponse对象B  <==== sseServer.send 发消息时会遍历 Set 中的每个 ServerResponse对象,每个对象都发一遍消息
+    浏览器窗口 C(EventSource对象 es) <===============> runtime 中 sseServer 中的 Set 中的 ServerResponse对象C  <==//
+
+    可以把 runtime 理解成服务器, 每一个浏览器就是一个用户在自己的电脑打开的应用，每个用户和服务器之间就会有一个连接
+
+    每个浏览器窗口可以切换不同的会话,每个会话都有一个唯一的 sessionId, runtime 发送消息的时候会带上 sessionId,前端根据 sessionId 来区分不同的会话并处理消息
+    浏览器中每一个窗口都会创建一个 SSE连接对象 es,同时对应 runtime 中 sseServer 中的 Set 中的每个 ServerResponse 对象,一对一的
+    前端根据 sessionId 来区分不同的会话并处理消息
+

@@ -7,6 +7,13 @@ export type NodeStreamChunk =
   | { kind: "delta"; turnId: string; text: string }
   | { kind: "using_tools"; turnId: string; tool: string }
   | {
+      kind: "tool_result";
+      turnId: string;
+      name: string;
+      args: Record<string, unknown>;
+      result: string;
+    }
+  | {
       kind: "turn_end";
       turnId: string;
       next_agent: string | null;

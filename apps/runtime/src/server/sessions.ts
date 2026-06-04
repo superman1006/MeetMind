@@ -1,6 +1,6 @@
 /**
  * 会话运行时状态:busy 标记(同会话串行,内存即可,重启可重置) + 进行中讨论的 AbortController(供打断)。
- * 消息 / 跨轮记忆已搬到 PostgreSQL,见 database/chatStore.ts。
+ * 消息 / 跨轮记忆已搬到 PostgreSQL,见 database/chat/chatStore.ts。
  */
 const busySessions = new Set<string>();
 // 每个正在跑的会话挂一个 AbortController;chat.interrupt 据此 abort() 打断 graph.stream。

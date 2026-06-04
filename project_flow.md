@@ -183,11 +183,13 @@ async (state, config) => {...}
   │
   ├── writer = config.writer            # 有 writer（服务端流式）才发事件；无 writer（CLI）退回非流式
   ├── writer?.({ kind:"turn_start", turnId, agent_name, role })
-  ├── onDelta(text)   = writer({ kind:"delta", turnId, text })          # Phase 2 每多吐一截 content 就推一次
-  ├── onToolUse(name) = writer({ kind:"using_tools", turnId, tool:name }) + toolsUsed.push(name)  # 工具执行前推
+  ├── onDelta(text)     = writer({ kind:"delta", turnId, text })        # Phase 2 每多吐一截 content 就推一次
+  ├── onToolUse(name)   = writer({ kind:"using_tools", turnId, tool:name }) + toolsUsed.push(name)  # 工具执行前推
+  ├── onToolResult(rec) = writer({ kind:"tool_result", turnId, name, args, result })  # 工具执行后推（带返回结果）
   │
-  ├── response = await agent.invoke(requirement, history, { onDelta, onToolUse })   # ← 核心（见第九节）
+  ├── response = await agent.invoke(requirement, history, { onDelta, onToolUse, onToolResult })   # ← 核心（见第九节）
   ├── if toolsUsed.length: response.tool = toolsUsed.join(", ")         # 本轮用过的工具名随消息落库
+  │   # response.tool_calls（每次调用的 {name,args,result}）由 base.ts 在 invoke 内部挂好，随消息落库
   ├── printAgentInfo(...)               # 控制台美化输出
   ├── writer?.({ kind:"turn_end", turnId, next_agent, done, used_rag })
   │
@@ -206,7 +208,7 @@ async (state, config) => {...}
 `apps/runtime/src/agents/base.ts`。子类只重写 `get systemPrompt()`，公共能力都在这里。
 
 ```
-BaseAgent.invoke(requirement, history, opts?={ onDelta, onToolUse })
+BaseAgent.invoke(requirement, history, opts?={ onDelta, onToolUse, onToolResult })
   │
   ├── cleanBadChars(requirement / history / prompts)   # 清除孤立 UTF-16 surrogate 码点
   ├── this.RAGRetriever.restart()                      # 清零本轮 callCount（供 used_rag 统计）
@@ -221,6 +223,7 @@ BaseAgent.invoke(requirement, history, opts?={ onDelta, onToolUse })
   │             toolToRun = allTools.find(t => t.name === tc.name)
   │             opts.onToolUse?.(tc.name)                # 执行前通知前端常驻 "UsingTools: <工具名>"
   │             out = await toolToRun.invoke(tc.args, { configurable:{ agentName: this.name } })  # 见第十、十一节
+  │             toolCallRecords.push({ name:tc.name, args:tc.args, result:out }); opts.onToolResult?.(record)  # 收集明细 + 推 tool_result
   │             Allmessages.push(new ToolMessage({ content: out, tool_call_id: tc.id }))
   │     # 跑满 3 轮仍要工具 → 强制进 Phase 2（warning 一条）
   │     # Phase 1 整体抛错 → 返回兜底 AgentResponse(next_agent=architect, done=false)
@@ -240,6 +243,7 @@ BaseAgent.invoke(requirement, history, opts?={ onDelta, onToolUse })
         ├── next_agent 不在 AGENT_NAMES → 兜底 architect（保证图不卡死）
         └── 返回 AgentResponse { agent_name, role, message, next_agent, done, used_rag }
               # used_rag = (this.RAGRetriever.callCount > 0)
+              # 返回前再挂上 response.tool_calls = toolCallRecords（本轮每次工具调用的 {name,args,result}）
 ```
 
 > 路由协议是 **zod 结构化输出** `ModelOutputSchema = { content, next_agent, done }` + `withStructuredOutput`，
@@ -250,18 +254,25 @@ BaseAgent.invoke(requirement, history, opts?={ onDelta, onToolUse })
 
 ## 九、工具层 `apps/runtime/src/tools/`
 
-每个工具是一个 `<xxx>Tool.ts` 导出的 LangChain `tool()` 单例，由 `ToolRegister` 收集成 `allTools`，BaseAgent 构造阶段 `bindTools(allTools)`：
+每个本地工具是一个 `<xxx>Tool.ts` 导出的 LangChain `tool()` 单例，集中在 `toolRegister.ts` 同步登记成 `allTools`；MCP 工具在 bootstrap 阶段**异步**追加进同一个数组。BaseAgent 构造阶段（晚于 bootstrap）`bindTools(allTools)`：
 
 ```
-toolRegistry.ts        # ToolRegister 类：register(tool) → push 进 allTools
-base.ts                # const toolRegister = new ToolRegister();
-                       #   toolRegister.register(ragSearchTool); toolRegister.register(webSearchTool)
-                       #   const allTools = toolRegister.allTools
+toolRegister.ts        # ToolRegister 类 + 单例 toolRegister + 同步登记本地工具 + export const allTools
+                       #   register(tool) → push 进 allTools（原地 push，所以 MCP 工具后续追加也能被看到）
+                       #   本地工具：ragSearchTool / echoTool / processTool / listDirTool / readFileTool
 
-ragSearchTool.ts       # 名字 rag_search —— 私有 RAG，按调用时 config.configurable.agentName
+ragSearchTool.ts       # rag_search —— 私有 RAG，按调用时 config.configurable.agentName
                        #   getRetriever(agentName).retrieve(query)（见第十节）查对应 agent 的私有表
-webSearchTool.ts       # 名字 web_search —— 走百度 AI Search MCP（SSE 传输，上游工具名 AIsearch）
-                       #   与 agent 无关；模块级懒加载单例连接；未配 key / 连接失败时返回提示串而不抛错
+echoTool.ts            # echo —— 命令行 echo 回显文本（execFile，不过 shell，无注入）
+processTool.ts         # list_processes —— ps aux 看进程，可选 filter 关键字
+listDirTool.ts         # list_dir —— fs.readdir 列目录（标注 dir/file）
+readFileTool.ts        # read_file —— fs.readFile 读文件文本（超 2 万字符截断）
+
+mcp/mcpClient.ts       # initMcpTools()：bootstrap 调（buildGraph 之前），用 @langchain/mcp-adapters 的
+                       #   MultiServerMCPClient 连百度 AI Search 的 MCP（SSE），getTools() 发现的工具
+                       #   登记进 toolRegister。上游工具名 AIsearch（取代旧的手写 web_search）。
+                       #   失败只跳过、不挂启动；wrapMcpToolWithZod 把 MCP 的 JSON-Schema 工具转成 zod
+                       #   schema 工具（否则旧版 @langchain/openai 的 bindTools 会崩，见 README 兼容说明）
 ```
 
 ---
@@ -353,8 +364,9 @@ export type AgentState = typeof AgentStateAnnotation.State;
 ```
 
 > `messages` 直接存 `AgentResponse[]`（`apps/runtime/src/agents/base.ts` 的接口），没有单独的 `MessageTurn`。
-> `AgentResponse` 字段：`agent_name / role / message / next_agent / done / used_rag / tool? / created_at?`
+> `AgentResponse` 字段：`agent_name / role / message / next_agent / done / used_rag / tool? / tool_calls? / created_at?`
 > （`next_agent` / `agent_name` / `used_rag` / `done` 刻意 snake_case，会序列化进 state；`created_at` 只读、仅 `getMessages` 回填）。
+> `tool_calls?: ToolCallRecord[]`（`{name,args,result}` 数组）是本轮每次工具调用的明细，落库进 `messages.tool_calls`（jsonb）。
 
 ---
 
@@ -365,10 +377,10 @@ export type AgentState = typeof AgentStateAnnotation.State;
 ```
 sessions   ( id text 主键, title text, created_at timestamptz, ended boolean )
 messages   ( id bigserial 主键, session_id text → sessions(id) ON DELETE CASCADE,
-             seq int, agent_name, role, message, next_agent, done, used_rag, tool, created_at )
-             # 一条 messages 行 = 一条 AgentResponse；建 (session_id, seq) 联合索引
+             seq int, agent_name, role, message, next_agent, done, used_rag, tool, tool_calls jsonb, created_at )
+             # 一条 messages 行 = 一条 AgentResponse；tool_calls 存每次工具调用的 {name,args,result}；建 (session_id, seq) 联合索引
 
-ensureChatTables()   # bootstrap 调；CREATE TABLE IF NOT EXISTS + ALTER ADD COLUMN IF NOT EXISTS（兼容旧表补 ended/tool 列）
+ensureChatTables()   # bootstrap 调；CREATE TABLE IF NOT EXISTS + ALTER ADD COLUMN IF NOT EXISTS（兼容旧表补 ended/tool/tool_calls 列）
 createSession(title) → { id(randomUUID), title, created_at, ended:false }
 listSessions()       → 按 created_at DESC
 getMessages(id)      → 按 seq ASC（回填 created_at 给前端展示发送时间）
@@ -426,6 +438,7 @@ getSettings()                          # apps/runtime/src/config/settings.ts
 | `turn_start`  | 某 agent 节点开始 | `{ turnId, agent_name, role }` |
 | `delta`       | Phase 2 流式收尾每多吐一截 | `{ turnId, text }` |
 | `using_tools` | 工具执行前 | `{ turnId, tool }` |
+| `tool_result` | 工具执行后 | `{ turnId, name, args, result }` |
 | `turn_end`    | 某 agent 节点结束 | `{ turnId, next_agent, done, used_rag }` |
 | `round_done`  | 一轮讨论结束 | `{ done }` 或 `{ done:false, interrupted:true }` |
 | `error`       | 讨论中异常 | `{ message }` |
@@ -463,9 +476,13 @@ getSettings()                          # apps/runtime/src/config/settings.ts
 | `database/splitters.ts` | splitDocs() —— 按 doc.type 切块 |
 | `database/rag_retriever.ts` | RAGRetriever —— VectorSearch + KeyWordSearch 并行 + 本地 rerank；getRetriever(name) 缓存 |
 | `database/chatStore.ts` | sessions / messages 持久化 |
-| `tools/toolRegistry.ts` | ToolRegister 类，收集 allTools |
+| `tools/toolRegister.ts` | ToolRegister 类 + 单例 + 本地工具登记 + export allTools |
 | `tools/ragSearchTool.ts` | rag_search 工具（私有 RAG，按 config.configurable.agentName 分 agent）|
-| `tools/webSearchTool.ts` | web_search 工具（百度 AI Search MCP）|
+| `tools/echoTool.ts` | echo 工具（命令行 echo 回显）|
+| `tools/processTool.ts` | list_processes 工具（ps aux 看进程）|
+| `tools/listDirTool.ts` | list_dir 工具（列目录）|
+| `tools/readFileTool.ts` | read_file 工具（读文件文本）|
+| `tools/mcp/mcpClient.ts` | initMcpTools()：MultiServerMCPClient 接入 MCP（AIsearch）+ JSON-Schema→zod shim |
 | `utils/utils.ts` | printAgentInfo() / printBanner() / cleanBadChars() 等 |
 | `utils/logger.ts` | getLogger() / setupLogging() |
 | `data/seed/<agent>/` | 各 agent 种子文件目录（json / pdf / docx / md / txt）|
@@ -495,7 +512,7 @@ getSettings()                          # apps/runtime/src/config/settings.ts
         │       └── INSERT          runDiscussion → graph.stream(["custom","values"], signal)
         └── countDocs                         │
                                               ▼
-                                   createNode(agent) 闭包  ──writer──▶ SSE: turn_start/delta/using_tools/turn_end
+                                   createNode(agent) 闭包  ──writer──▶ SSE: turn_start/delta/using_tools/tool_result/turn_end
                                               │
                                               ▼
                                    agent.invoke(req, hist, {onDelta,onToolUse})
@@ -505,7 +522,8 @@ getSettings()                          # apps/runtime/src/config/settings.ts
                                               │           ├── KeyWordSearch (pg_trgm word_similarity)
                                               │           ├── merge (按 id 去重)
                                               │           └── rerank (本地 cross-encoder)
-                                              │     └── web_search → 百度 AI Search MCP
+                                              │     ├── echo / list_processes / list_dir / read_file → 命令行 / 文件
+                                              │     └── AIsearch → 百度 AI Search MCP（MultiServerMCPClient 适配）
                                               └── Phase2: withStructuredOutput(ModelOutput)
                                                     └── _buildAgentResponse → AgentResponse
                                                           │

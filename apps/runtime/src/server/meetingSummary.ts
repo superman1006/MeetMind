@@ -9,8 +9,8 @@ import { AGENT_NAMES, ARCHITECT, ROLE_DESCRIPTIONS } from "../config/constants.j
 import { PROJECT_ROOT } from "../config/settings.js";
 import type { AgentResponse, BaseAgent } from "../agents/base.js";
 import { buildAllAgents } from "../graph/builder.js";
-import * as chatStore from "../database/chatStore.js";
-import * as sse from "./sse.js";
+import * as chatStore from "../database/chat/chatStore.js";
+import * as sse from "./sseServer.js";
 import { getLogger } from "../utils/logger.js";
 
 const logger = getLogger("server.meetingSummary");

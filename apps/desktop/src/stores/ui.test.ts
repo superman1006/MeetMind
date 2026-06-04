@@ -67,4 +67,45 @@ describe("ui store", () => {
     expect(ui.theme).toBe("light");
     expect(document.documentElement.getAttribute("data-theme")).toBe("light");
   });
+
+  it("showToast 弹提示,3 秒后自动消失", () => {
+    vi.useFakeTimers();
+    const ui = useUiStore();
+    expect(ui.toast).toBeNull();
+    ui.showToast("会话已删除");
+    expect(ui.toast?.message).toBe("会话已删除");
+    vi.advanceTimersByTime(3000);
+    expect(ui.toast).toBeNull();
+    vi.useRealTimers();
+  });
+
+  it("连续 showToast 会换 id 并重置自动消失计时", () => {
+    vi.useFakeTimers();
+    const ui = useUiStore();
+    ui.showToast("第一条");
+    const firstId = ui.toast?.id;
+    vi.advanceTimersByTime(2000);
+    ui.showToast("第二条");
+    expect(ui.toast?.message).toBe("第二条");
+    expect(ui.toast?.id).not.toBe(firstId);
+    // 距第二条只过了 2 秒,仍在
+    vi.advanceTimersByTime(2000);
+    expect(ui.toast?.message).toBe("第二条");
+    // 再过 1 秒满 3 秒,消失
+    vi.advanceTimersByTime(1000);
+    expect(ui.toast).toBeNull();
+    vi.useRealTimers();
+  });
+
+  it("dismissToast 立即关闭并取消计时", () => {
+    vi.useFakeTimers();
+    const ui = useUiStore();
+    ui.showToast("会话已删除");
+    ui.dismissToast();
+    expect(ui.toast).toBeNull();
+    // 计时已被取消,推进时间不会再有副作用
+    vi.advanceTimersByTime(3000);
+    expect(ui.toast).toBeNull();
+    vi.useRealTimers();
+  });
 });

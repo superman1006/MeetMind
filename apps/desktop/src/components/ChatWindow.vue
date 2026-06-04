@@ -1,10 +1,9 @@
 <script setup lang="ts">
 import { computed, ref, watch, nextTick } from "vue";
-import { useChatStore } from "../stores/chat.js";
+import { useChatStore, shouldShowTailThinking } from "../stores/chat.js";
 import type { StoredTurn } from "../stores/chat.js";
 import { useSessionsStore } from "../stores/sessions.js";
 import { rpc } from "../api/rpcClient.js";
-import { openEvents } from "../api/sseClient.js";
 import MessageBubble from "./MessageBubble.vue";
 import Composer from "./Composer.vue";
 import MeetingEndDialog from "./MeetingEndDialog.vue";
@@ -30,58 +29,16 @@ const title = computed(() => {
 const scroller = ref<HTMLElement | null>(null);
 // 「会话已结束」提示弹窗开关
 const endedNotice = ref(false);
-// 会议结束整理弹窗状态(单会话 demo,弹窗为全屏模态,整理中不能切会话,共用一个 ref 足够)。
-const summary = ref<{
-  open: boolean;
-  status: "summarizing" | "done" | "error";
-  message: string;
-  detail: string;
-}>({ open: false, status: "summarizing", message: "", detail: "" });
+// 会议结束整理弹窗状态:存在 chat store 里按会话区分(由全局 SSE 订阅的 summary_* 事件驱动)。
+const summary = computed(() => chat.summaryOf(props.sessionId));
 
-// 尾部「思考中」占位:讨论进行中,且当前没有正在流式的空气泡时显示。
-// (空 agent 气泡自己会显示流动点;这里覆盖"刚发完还没 turn_start"和轮次间隙。)
-const showThinking = computed(() => {
-  if (!busy.value) {
-    return false;
-  }
-  const list = bubbles.value;
-  if (list.length === 0) {
-    return true;
-  }
-  const last = list[list.length - 1];
-  return last.text.length > 0;
-});
+// 尾部「思考中」占位:只在「等下一个 agent 开口」的间隙显示(用户刚发完还没 turn_start、
+// 或上一个 agent 已结束还没轮到下一个)。一旦某个 agent 已 turn_start——无论它还在 Phase 1
+// 思考(空泡自己显示流动点)还是已经在流式输出(有字)——尾部「思考中」都不再出现。
+// 判定逻辑抽到 store 里的纯函数,便于单测;关键是靠 turnEnded 而非 text 区分「正在输出」和「轮次间隙」。
+const showThinking = computed(() => shouldShowTailThinking(busy.value, bubbles.value));
 
-// 每个 session 一条 SSE 连接,切换 sessionId 时重连
-let es: EventSource | null = null;
-function connect(sessionId: string): void {
-  if (es) {
-    // 把
-    es.close();
-    es = null;
-  }
-  if (!sessionId) {
-    return;
-  }
-  // 创建 SSE事件流管道，监听后端事件，更新状态
-  es = openEvents(sessionId, {
-    onTurnStart: (p) => chat.startTurn(sessionId, p.turnId, p.agent_name, p.role),
-    onDelta: (p) => chat.appendDelta(sessionId, p.turnId, p.text),
-    onUsingTools: (p) => chat.useTool(sessionId, p.turnId, p.tool),
-    onTurnEnd: (p) => chat.endTurn(sessionId, p.turnId, p.used_rag),
-    onRoundDone: () => chat.finishRound(sessionId),
-    onError: (p) => chat.addErrorBubble(sessionId, p.message),
-    onSummaryDone: (p) => {
-      summary.value.status = "done";
-      summary.value.message = "会议纪要已生成";
-      summary.value.detail = p.file;
-    },
-    onSummaryError: (p) => {
-      summary.value.status = "error";
-      summary.value.message = p.message;
-    },
-  });
-}
+// SSE 事件流已由 App.vue 全局订阅(单条 firehose,按 sessionId 路由),这里不再各自建连。
 
 // 打开会话时从 DB 拉历史填充气泡;讨论进行中(busy)则跳过,保留正在流式的本地气泡。
 async function loadHistory(sessionId: string): Promise<void> {
@@ -102,7 +59,6 @@ watch(
   (id) => {
     chat.ensure(id);
     loadHistory(id);
-    connect(id);
   },
   { immediate: true },
 );
@@ -142,17 +98,11 @@ async function onInterrupt(): Promise<void> {
 async function onEnd(): Promise<void> {
   // 点结束即标记会话结束:此后该会话回车/点发送会被 Composer 拦截 → onBlocked 弹提示。
   chat.markEnded(props.sessionId);
-  summary.value = {
-    open: true,
-    status: "summarizing",
-    message: "当前会议已结束,正在整理会议纪要",
-    detail: "",
-  };
+  chat.openSummary(props.sessionId);
   try {
     await rpc("chat.end", { sessionId: props.sessionId });
   } catch (e) {
-    summary.value.status = "error";
-    summary.value.message = String(e);
+    chat.setSummaryError(props.sessionId, String(e));
   }
 }
 
@@ -166,6 +116,8 @@ function onBlocked(): void {
   <section class="chat">
     <header class="chat-header">{{ title }}</header>
     <div ref="scroller" class="scroll">
+      <!-- 新建会话、用户还没发首条消息:正中间给一句占位提示,而不是空白 -->
+      <div v-if="bubbles.length === 0 && !showThinking" class="empty-hint">请输入需求后开始会议</div>
       <MessageBubble v-for="b in bubbles" :key="b.turnId" :bubble="b" />
       <div v-if="showThinking" class="row">
         <div class="thinking-bubble">
@@ -187,7 +139,7 @@ function onBlocked(): void {
       :status="summary.status"
       :message="summary.message"
       :detail="summary.detail"
-      @close="summary.open = false"
+      @close="chat.closeSummary(props.sessionId)"
     />
     <ConfirmDialog
       v-if="endedNotice"
@@ -206,6 +158,8 @@ function onBlocked(): void {
 /* 顶部会话标题栏(仿 Claude 桌面端):纤细、左对齐、底部分隔线 */
 .chat-header { padding: 12px 16px; font-size: 15px; font-weight: 600; color: var(--text-main); background: var(--bg-chat); border-bottom: 1px solid var(--border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 0; }
 .scroll { flex: 1; overflow-y: auto; padding: 16px; background: var(--bg-chat); }
+/* 空会话占位:撑满滚动区高度,水平 + 垂直居中 */
+.empty-hint { height: 100%; display: flex; align-items: center; justify-content: center; color: var(--text-dim); font-size: 15px; }
 .row { display: flex; margin: 8px 0; }
 .thinking-bubble { display: inline-flex; align-items: center; gap: 8px; max-width: 72%; padding: 10px 12px; border-radius: 12px; background: var(--bg-elevated); color: var(--text-dim); }
 .thinking-label { font-size: 12px; }

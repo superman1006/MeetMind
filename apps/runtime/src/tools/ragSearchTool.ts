@@ -10,7 +10,7 @@ import { tool } from "@langchain/core/tools";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import { z } from "zod";
 
-import { getRetriever, type RetrievedDoc } from "../database/rag_retriever.js";
+import { getRetriever, type RetrievedDoc } from "../database/index.js";
 import { ARCHITECT } from "../config/constants.js";
 
 /** 把单条 RetrievedDoc 渲染成 LLM 友好的一行：- [type / date] content。 */

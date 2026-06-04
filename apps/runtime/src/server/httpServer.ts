@@ -3,8 +3,8 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 
 import type { buildGraph } from "../graph/builder.js";
-import { handleRpc, type RpcRequest } from "./rpc.js";
-import { addClient, removeClient } from "./sse.js";
+import { handleRpc, type RpcRequest } from "./rpcServer.js";
+import { addClient, removeClient } from "./sseServer.js";
 import { getLogger } from "../utils/logger.js";
 
 const logger = getLogger("server.http");
@@ -65,15 +65,8 @@ async function handleApi(graph: CompiledGraph, req: IncomingMessage, res: Server
 }
 
 // 处理 GET /events:为前端开一条 SSE 长连接并登记起来。注意它不调 res.end,让连接一直开着以便后续往里推消息。
-function handleEvents(req: IncomingMessage, res: ServerResponse, url: URL): void {
-  // 前端订阅时必须带上要订阅哪个会话,没带就拒绝。
-  const sessionId = url.searchParams.get("sessionId");
-  if (!sessionId) {
-    res.writeHead(400);
-    res.end("missing sessionId");
-    return;
-  }
-
+// B 方案:整个前端只开这一条 firehose 长连,订阅所有会话,不再带 sessionId;每帧自带 sessionId,前端据此路由。
+function handleEvents(req: IncomingMessage, res: ServerResponse): void {
   // SSE 必须的三个响应头:告诉浏览器“这是事件流、别缓存、保持连接别挂断”。
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
@@ -84,16 +77,16 @@ function handleEvents(req: IncomingMessage, res: ServerResponse, url: URL): void
   // 先写一帧注释(以 : 开头、前端会忽略),逼中间代理立刻把响应头发出去,让前端尽快确认连上了。
   res.write(": connected\n\n");
 
-  // 打印「收到的 SSE 订阅」:HTTP 方法 + 路径 + 订阅的会话 id。
-  logger.info({ url: "/events", httpMethod: req.method ?? "GET", sessionId }, "← SSE 订阅");
+  // 打印「收到的 SSE 订阅」:HTTP 方法 + 路径。
+  logger.info({ url: "/events", httpMethod: req.method ?? "GET" }, "← SSE 订阅");
 
-  // 把这条连接登记到对应会话(见 sse.ts),之后业务代码就能用 send(sessionId,...) 往它推消息。
-  addClient(sessionId, res);
+  // 把这条连接登记进来(见 sseServer.ts),之后业务代码就能用 send(sessionId,...) 往它推消息。
+  addClient(res);
 
   // 前端关页面/断网时连接会触发 close,顺手把它从登记表移除,避免往死连接里写。
   req.on("close", () => {
-    logger.debug({ url: "/events", sessionId }, "SSE 连接关闭");
-    removeClient(sessionId, res);
+    logger.debug({ url: "/events" }, "SSE 连接关闭");
+    removeClient(res);
   });
 }
 
@@ -136,9 +129,9 @@ export function startServer(graph: CompiledGraph, port: number): void {
       return;
     }
 
-    // GET /events:开 SSE 长连。
+    // GET /events:开 SSE 长连(firehose,订阅所有会话)。
     if (method === "GET" && url.pathname === "/events") {
-      handleEvents(req, res, url);
+      handleEvents(req, res);
       return;
     }
 

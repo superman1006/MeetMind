@@ -1,0 +1,9 @@
+把输入的 query 拿到后，通
+过 huggingface 的 transformers 的embedding 模型转换成指定纬度的向量 ==> vector
+然后把vector拿到postgre 数据库里分别用
+    1.pgvector插件 提供的 hsnw 索引进行 向量相似度 检索搜索，得到 top k 个相关的文本内容
+    2.trigram插件的 gin 索引进行文本相似度检索搜索，得到 top k 个相关的文本内容
+最后把两个结果通过reranker 模型计算每一个文本内容与输入 query 的相关度分数，得到最终的 top n 个相关文本内容返回给用户。
+
+
+

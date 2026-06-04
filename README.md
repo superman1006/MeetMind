@@ -33,45 +33,35 @@ LLM 接入采用 **OpenAI 兼容协议** (`@langchain/openai` 的 `ChatOpenAI`)�
 
 ## 项目结构
 
+这是一个 **pnpm monorepo**，两个 app：
+
 ```text
 MeetMind/
-├── package.json                     # 依赖声明 + scripts (dev / start / build)
+├── package.json                     # 根 workspace：dev / dev:runtime / dev:desktop / typecheck / build / test
+├── pnpm-workspace.yaml              # workspace 声明（apps/*）
 ├── pnpm-lock.yaml                   # 锁文件（包管理用 pnpm）
-├── tsconfig.json                    # TypeScript 配置
+├── tsconfig.base.json               # 共享 TS 配置
 ├── docker-compose.yml               # 本地单节点 PostgreSQL+pgvector（pgvector/pgvector:pg17, 宿主机 5433）
-├── .env.example                     # 环境变量模板；复制为 .env 后填写
-├── .env                             # 真实运行配置（git-ignored）
-├── models/                          # embedding / rerank 模型本地缓存（git-ignored）
-├── README.md / project-flow.md / CLAUDE.md
+├── .env.example / .env              # 环境变量模板 / 真实运行配置（.env 在根，两个 app 共享）
+├── README.md / project_flow.md / CLAUDE.md
+├── models/                          # embedding / rerank 模型本地缓存（git-ignored，两个 app 共享）
+├── data/
+│   ├── seed/<agent>/                # ★ RAG 种子文档（输入）*.{json,pdf,docx,md,txt}
+│   └── summary/<sessionId>.md       # 会议结束整理出的纪要
 │
-├── src/                             # ★ 源码
-│   ├── index.ts                     # 进程入口：先 load .env，再 import cli/main
-│   ├── agents/                      # BaseAgent + 5 个角色 Agent
-│   │   ├── base.ts                  # 抽象基类：两阶段 LLM 调用（工具循环 + 结构化收尾）
-│   │   ├── architect.ts / backend.ts / frontend.ts / tester.ts / pm.ts
-│   │
-│   ├── database/                    # ★ PostgreSQL 存储 + 混合检索 + 本地 rerank
-│   │   ├── client.ts                # pg.Pool 单例 + 建表/扩展/索引（vector + pg_trgm）
-│   │   ├── embedding.ts             # transformers.js feature-extraction（单例）
-│   │   ├── reranker.ts              # ★ 本地 cross-encoder rerank（@huggingface/transformers）
-│   │   ├── loaders.ts               # 文件解析：JSON / MD / PDF / DOCX / TXT 五种 loader
-│   │   ├── splitters.ts             # 按文件类型选 splitter 切块
-│   │   ├── initializer.ts           # 灌库流程：load → split → embed → INSERT ON CONFLICT
-│   │   ├── rag_retriever.ts         # ★ pg_trgm + pgvector 并行检索 → 合并去重 → 本地 rerank
-│   │   └── constants.ts             # 表名约定：`<prefix>_<agent>`
-│   │
-│   ├── graph/                       # LangGraph 编排
-│   │   ├── state.ts                 # AgentState (Annotation.Root)：messages 追加 / 其余覆盖
-│   │   ├── route.ts                 # routeToWhichAgent 条件边
-│   │   └── builder.ts               # 装配 + compile StateGraph
-│   │
-│   ├── config/                      # Settings (zod) + 常量
-│   ├── utils/                       # logger / formatting
-│   └── cli/main.ts                  # 交互式 CLI：banner → bootstrap → 主循环
-│
-└── data/seed/<agent>/               # ★ RAG 种子文档（输入）
-    └── *.{json,pdf,docx,md,txt}     # 任意支持的格式，loader 按后缀分发
+└── apps/
+    ├── runtime/                     # ★ 后端：多 Agent 讨论 + RAG + 持久化 + HTTP/SSE 服务(3002)
+    │   ├── src/  (agents / graph / database / tools / server / config / utils / cli)
+    │   └── README.md                # → 后端详细说明
+    └── desktop/                     # ★ 前端：Vue 3 + Vite + Tauri 2 桌面外壳
+        ├── src/  (api / stores / components / theme)
+        ├── src-tauri/               # Tauri 原生外壳（Rust）
+        └── README.md                # → 前端详细说明
 ```
+
+- **后端 [`apps/runtime/README.md`](apps/runtime/README.md)** —— 引擎 + 工具层（RAG / 命令行 / 文件 / MCP 联网搜索）+ PostgreSQL 持久化 + HTTP/SSE 服务。
+- **前端 [`apps/desktop/README.md`](apps/desktop/README.md)** —— 聊天式界面、流式讨论、工具调用按钮 + 结果面板。
+- **逐函数调用链 [`project_flow.md`](project_flow.md)** —— runtime 的完整调用链 + SSE 事件契约。
 
 > 备注：
 > - PostgreSQL 数据存在 docker volume `meetmind_pg_data` 里（不在项目目录内）；删卷 `docker compose down -v` 会触发下次启动重灌种子。
@@ -145,8 +135,8 @@ pnpm build && pnpm start:prod
 
 后端 3002 暴露 `POST /api`（JSON-RPC）与 `GET /events?sessionId=…`（SSE）：
 
-- **JSON-RPC method**：`chat.send`（开一轮讨论，后台跑、立即返回，过程走 SSE）、`chat.interrupt`（打断本轮，abort 后丢弃不落库）、`session.create` / `session.list` / `session.messages` / `session.rename` / `session.delete`。
-- **SSE 事件**：`turn_start` / `delta` / `using_tools` / `turn_end` / `round_done` / `error`。
+- **JSON-RPC method**：`chat.send`（开一轮讨论，后台跑、立即返回，过程走 SSE）、`chat.interrupt`（打断本轮，abort 后丢弃不落库）、`chat.end`（结束会议→整理纪要写 `data/summary/<id>.md`）、`session.create` / `session.list` / `session.messages` / `session.rename` / `session.delete`。
+- **SSE 事件**：`turn_start` / `delta` / `using_tools` / `tool_result`（某次工具调用的 name/args/result）/ `turn_end` / `round_done` / `error` / `summary_done`·`summary_error`。
 - **会话与消息持久化在 PostgreSQL**（`<prefix>_sessions` / `<prefix>_messages` 两张表），刷新/重开会话会从 DB 还原历史；删除会话级联删消息。
 - **消息时间戳**：每条气泡下方显示发送时间（`2026-6-2 18:23`）。**纯前端展示**——live 消息用浏览器当前时间，历史消息用 DB `messages.created_at`（该列由 `DEFAULT now()` 自动生成，app 不额外写入）。
 
@@ -159,7 +149,7 @@ pnpm build && pnpm start:prod
 1. **启动时**：所有 agent 的种子文件灌入对应 PostgreSQL 表（content + embedding + metadata）。
 2. **架构师输入需求** → 进入 LangGraph 流程。
 3. **每个 Agent 节点**（`BaseAgent.invoke`，两阶段）:
-   - **Phase 1 工具循环**：把私有 RAG 检索器作为 LangChain Tool 绑定到 LLM，LLM 自主决定是否调用 `rag_search_<agent>`；调用时执行 PostgreSQL hybrid（pg_trgm + pgvector）+ 本地 rerank（最多 5 轮）。
+   - **Phase 1 工具循环**：构造阶段就把一批工具 `bindTools` 到 LLM，LLM 自主决定调哪个（最多 3 轮）。工具有：`rag_search`（私有 RAG，PostgreSQL hybrid pg_trgm+pgvector + 本地 rerank）、`echo` / `list_processes` / `list_dir` / `read_file`（命令行 / 文件）、`AIsearch`（经 MultiServerMCPClient 接入百度 AI Search MCP 联网搜索）。每次调用的 `{name,args,result}` 收进 `tool_calls` 落库 + 经 `tool_result` 事件推给前端。
    - **Phase 2 结构化收尾**：用 `withStructuredOutput` 强制 LLM 产出 `ModelOutput { content, next_agent, done }`。
 4. **条件边路由 (`routeToWhichAgent`)**: `iteration ≥ max → END`；`done → END`；`next_agent ∈ AGENT_NAMES → 对应节点`；兜底回 architect。
 5. **架构师复盘**：CLI 提示是否继续新一轮或退出。
@@ -186,7 +176,7 @@ pnpm build && pnpm start:prod
 **重置某个 Agent 的 PostgreSQL 表**：
 
 ```bash
-pnpm exec tsx -e "import('./src/database/initializer.ts').then(m => m.resetAgentDb('backend'))"
+pnpm --filter @meetmind/runtime exec tsx -e "import('./src/database/initializer.ts').then(m => m.resetAgentDb('backend'))"
 ```
 
 **完全清空 + 重灌**：
@@ -202,12 +192,14 @@ pnpm dev                  # 启动时会自动重灌
 
 **增加新 Agent**：
 
-1. `src/config/constants.ts` 加入名字；
+1. `apps/runtime/src/config/constants.ts` 加入名字；
 2. 复制一个 agent 类实现 `systemPrompt`；
-3. `src/graph/builder.ts` 的 `buildAllAgents()` 注册；
+3. `apps/runtime/src/graph/builder.ts` 的 `buildAllAgents()` 注册；
 4. 在 `data/seed/<name>/` 放种子文件。
 
-**切换 LLM 提供商**：只要提供 OpenAI 兼容端点，改 `.env` 中的 `BASE_URL` 与 `MODEL_NAME` 即可。若新提供商不支持 `extra_body.thinking`，可在 `src/agents/base.ts` 中删除 `modelKwargs.thinking` 参数。
+**新增工具**：在 `apps/runtime/src/tools/` 建一个 `<xxx>Tool.ts` 导出 `tool()` 单例，再到 `toolRegister.ts` 加一行 import + 一行 `register`（所有 agent 共用同一批工具）。接外部 MCP 走 `tools/mcp/mcpClient.ts`。
+
+**切换 LLM 提供商**：只要提供 OpenAI 兼容端点，改 `.env` 中的 `BASE_URL` 与 `MODEL_NAME` 即可。若新提供商不支持 `extra_body.thinking`，可在 `apps/runtime/src/agents/base.ts` 中删除 `modelKwargs.thinking` 参数。
 
 ---
 

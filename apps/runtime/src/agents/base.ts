@@ -24,15 +24,15 @@ import {
   isAgentName,
 } from "../config/constants.js";
 import { getSettings } from "../config/settings.js";
-import { type RAGRetriever, getRetriever } from "../database/rag_retriever.js";
+import { type RAGRetriever, getRetriever } from "../database/index.js";
 import { getLogger } from "../utils/logger.js";
 import { cleanBadChars} from "../utils/utils.js";
 import { streamStructuredContent } from "./streamStructured.js";
 // 全局工具清单（本地工具 + bootstrap 阶段异步登记的 MCP 工具）。
 // allTools 是共享数组引用：bootstrap 里追加的 MCP 工具，这里 bindTools 时也能看到。
-import { allTools } from "../tools/registry.js";
+import { allTools } from "../tools/toolRegister.js";
 
-const _MAX_TOOL_ITERATIONS = 3;
+const _MAX_TOOL_ITERATIONS = 5;
 const logger = getLogger("agents.base");
 
 
@@ -61,6 +61,28 @@ export const ModelOutputSchema = z.object({
     ),
 });
 export type ModelOutput = z.infer<typeof ModelOutputSchema>;
+
+/**
+ * 把结构化输出里的 done 收敛成 bool。
+ * schema 声明 done 是字符串('true'/'false')，但部分 OpenAI 兼容后端会无视 schema、
+ * 直接返回 JSON 布尔 true/false——这时 done 是 boolean，旧代码 output.done.trim() 会抛
+ * "trim is not a function"。所以这里同时兼容 boolean 与字符串两种形态。
+ */
+export function coerceDone(done: unknown): boolean {
+  if (typeof done === "boolean") {
+    return done;
+  }
+  const rawStr = String(done);
+  const doneStr = rawStr.trim().toLowerCase();
+  return (
+    doneStr === "true" ||
+    doneStr === "yes" ||
+    doneStr === "1" ||
+    doneStr === "y" ||
+    doneStr === "done" ||
+    doneStr === "完成"
+  );
+}
 
 
 /**
@@ -94,6 +116,13 @@ export type MeetingSummary = z.infer<typeof MeetingSummarySchema>;
 /**
  * 一次 Agent.invoke() 的产物，同时也是追加进 `AgentState.messages` 的历史条目
  */
+/** 一次工具调用的完整记录：工具名 + 入参 + 返回结果。用于前端「每个调用一个按钮、点开看结果」。 */
+export interface ToolCallRecord {
+  name: string;
+  args: Record<string, unknown>;
+  result: string;
+}
+
 export interface AgentResponse {
   agent_name: string;
   role: string;
@@ -103,6 +132,8 @@ export interface AgentResponse {
   used_rag: boolean;
   // 本轮用过的工具名(去重、", "连接);没用工具则为空串/缺省。用于前端常驻 UsingTools 标签。
   tool?: string;
+  // 本轮每一次工具调用的明细(name/args/result)，按调用顺序排列。落库进 messages.tool_calls(jsonb)。
+  tool_calls?: ToolCallRecord[];
   // 这条消息在 DB 里的写入时间(只读,仅 getMessages 回填给前端展示发送时间);
   // 不参与 LLM,也不由 appendMessages 写入(写入时间由 DB 列 DEFAULT now() 自动生成)。
   created_at?: string;
@@ -209,7 +240,12 @@ export abstract class BaseAgent {
   async invoke(
     requirement: string,
     conversationHistory: string,
-    opts?: { onDelta?: (text: string) => void; onToolUse?: (toolName: string) => void },
+    opts?: {
+      onDelta?: (text: string) => void;
+      onToolUse?: (toolName: string) => void;
+      // 每次工具执行完成后调一次，带上该次调用的 name/args/result（前端据此加按钮 + 展开结果）。
+      onToolResult?: (rec: ToolCallRecord) => void;
+    },
   ): Promise<AgentResponse> {
     // 1) 清乱码：去掉 stdin 来的孤立 surrogate
     const requirement_cleaned = cleanBadChars(requirement);
@@ -225,6 +261,9 @@ export abstract class BaseAgent {
       new SystemMessage(systemPrompt),
       new HumanMessage(userPrompt), // 所有的历史消息
     ];
+
+    // 本轮每次工具调用的明细(name/args/result)，按调用顺序收集，最后挂到 response.tool_calls 落库。
+    const toolCallRecords: ToolCallRecord[] = [];
 
     // ===== Phase 1：工具循环 =====
     // _modelWithTools 在构造阶段就已 bindTools，这里直接复用
@@ -271,6 +310,14 @@ export abstract class BaseAgent {
           } else {
             toolResult = `(未知工具: ${toolName})`;
           }
+          // 记下这次调用的明细(name/args/result)：收集起来落库，并实时回调给前端加按钮
+          const record: ToolCallRecord = {
+            name: toolName,
+            args: toolArgs as Record<string, unknown>,
+            result: toolResult,
+          };
+          toolCallRecords.push(record);
+          opts?.onToolResult?.(record);
           Allmessages.push(
             new ToolMessage({ content: toolResult, tool_call_id: toolId }),
           );
@@ -327,21 +374,19 @@ export abstract class BaseAgent {
       };
     }
 
-    return this._buildAgentResponse(finalOutput);
+    const response = this._buildAgentResponse(finalOutput);
+    if (toolCallRecords.length > 0) {
+      response.tool_calls = toolCallRecords;
+    }
+    return response;
   }
 
   // ---------- 辅助方法 ----------
 
   /** 把 LLM 的结构化输出 coerce 成 AgentResponse：done 字符串→bool，非法 next_agent 兜底回架构师。 */
   private _buildAgentResponse(output: ModelOutput): AgentResponse {
-    const doneStr = output.done.trim().toLowerCase();
-    const isDone =
-      doneStr === "true" ||
-      doneStr === "yes" ||
-      doneStr === "1" ||
-      doneStr === "y" ||
-      doneStr === "done" ||
-      doneStr === "完成";
+    // done 可能是字符串('true'/'完成'…)，也可能被后端当 JSON 布尔返回，coerceDone 两者都兼容
+    const isDone = coerceDone(output.done);
 
     // 非法 next_agent 兜底回架构师，保证图不卡死
     let nextAgentName = output.next_agent.trim().toLowerCase();

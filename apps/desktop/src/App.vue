@@ -1,20 +1,48 @@
 <script setup lang="ts">
-import { onMounted } from "vue";
+import { onMounted, onBeforeUnmount } from "vue";
 import { useSessionsStore } from "./stores/sessions.js";
 import { useChatStore } from "./stores/chat.js";
+import { openEvents } from "./api/sseClient.js";
 import SessionList from "./components/SessionList.vue";
 import ChatWindow from "./components/ChatWindow.vue";
+import Toast from "./components/Toast.vue";
 
 const sessions = useSessionsStore();
 const chat = useChatStore();
 
-// 启动:先从服务端拉会话列表;一个都没有再建一个,避免空屏
+// B 方案:整个前端只开这一条 SSE 长连(firehose),订阅所有会话。每帧自带 sessionId,
+// 这里按 p.sessionId 把事件路由到 chat store 对应会话——后台未展示的会话也能实时收到自己的流。
+let es: EventSource | null = null;
+function subscribeEvents(): void {
+  es = openEvents({
+    onTurnStart: (p) => chat.startTurn(p.sessionId, p.turnId, p.agent_name, p.role),
+    onDelta: (p) => chat.appendDelta(p.sessionId, p.turnId, p.text),
+    onUsingTools: (p) => chat.useTool(p.sessionId, p.turnId, p.tool),
+    onToolResult: (p) => chat.addToolCall(p.sessionId, p.turnId, { name: p.name, args: p.args, result: p.result }),
+    onTurnEnd: (p) => chat.endTurn(p.sessionId, p.turnId, p.used_rag),
+    onRoundDone: (p) => chat.finishRound(p.sessionId),
+    onError: (p) => chat.addErrorBubble(p.sessionId, p.message),
+    onSummaryDone: (p) => chat.setSummaryDone(p.sessionId, p.file),
+    onSummaryError: (p) => chat.setSummaryError(p.sessionId, p.message),
+  });
+}
+
+// 启动:先开事件流,再从服务端拉会话列表;一个都没有再建一个,避免空屏
 onMounted(async () => {
+  subscribeEvents();
   await sessions.load();
   // 把后端持久化的「已结束」状态灌进 chat store,刷新/重启后已结束的会议仍锁定。
   chat.hydrateEnded(sessions.list);
   if (sessions.list.length === 0) {
     await sessions.newSession();
+  }
+});
+
+// 应用卸载时断开这条长连(单窗口 demo 基本是整页关闭,顺手收尾)。
+onBeforeUnmount(() => {
+  if (es) {
+    es.close();
+    es = null;
   }
 });
 </script>
@@ -24,6 +52,7 @@ onMounted(async () => {
     <SessionList />
     <ChatWindow v-if="sessions.activeId" :session-id="sessions.activeId" />
     <section v-else class="empty">点击「+ 新会话」开始</section>
+    <Toast />
   </div>
 </template>
 

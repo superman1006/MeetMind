@@ -10,11 +10,14 @@ import ora from "ora";
 
 import { AGENT_NAMES } from "./config/constants.js";
 import { getSettings } from "./config/settings.js";
-import { countDocs, pingDb } from "./database/client.js";
-import { ensureChatTables } from "./database/chatStore.js";
-import { getEmbedderModel } from "./database/embedding.js";
-import { buildAgentsTables } from "./database/initializer.js";
-import { initMcpTools } from "./tools/mcpClient.js";
+import {
+  buildAgentsTables,
+  countDocs,
+  ensureChatTables,
+  getEmbedderModel,
+  pingDb,
+} from "./database/index.js";
+import { initMcpTools } from "./tools/mcp/mcpClient.js";
 import { pathExists, printSystem } from "./utils/utils.js";
 import { setupLogging } from "./utils/logger.js";
 

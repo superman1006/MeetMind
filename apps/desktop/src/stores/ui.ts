@@ -1,10 +1,17 @@
 import { defineStore } from "pinia";
 
-// 界面状态:会话列表是否收缩 + 浅/深主题。独立成 store,避免组件间传 prop。
+// 顶部轻提示的自动消失计时器 + 自增序号(模块级,不进 store state,避免被序列化)。
+// 序号每次 showToast 自增,作为 Toast 组件的 :key,让连续触发也能重新播放进场动画。
+let toastTimer: ReturnType<typeof setTimeout> | null = null;
+let toastSeq = 0;
+
+// 界面状态:会话列表是否收缩 + 浅/深主题 + 顶部轻提示。独立成 store,避免组件间传 prop。
 export const useUiStore = defineStore("ui", {
   state: () => ({
     sidebarCollapsed: false,
     theme: "light" as "light" | "dark",
+    // 右上角一闪即逝的轻提示(如「会话已删除」);null 表示当前无提示。
+    toast: null as { id: number; message: string } | null,
   }),
   actions: {
     toggleSidebar(): void {
@@ -35,6 +42,26 @@ export const useUiStore = defineStore("ui", {
         // 不可用就只切不存,不抛错
       }
       this.applyTheme();
+    },
+    // 弹一条右上角轻提示,默认 3 秒后自动消失;期间再次触发会重置计时并重播动画。
+    showToast(message: string): void {
+      toastSeq += 1;
+      this.toast = { id: toastSeq, message };
+      if (toastTimer) {
+        clearTimeout(toastTimer);
+      }
+      toastTimer = setTimeout(() => {
+        this.toast = null;
+        toastTimer = null;
+      }, 3000);
+    },
+    // 手动关闭(点 × 时调),顺手清掉自动消失计时器。
+    dismissToast(): void {
+      if (toastTimer) {
+        clearTimeout(toastTimer);
+        toastTimer = null;
+      }
+      this.toast = null;
     },
   },
 });

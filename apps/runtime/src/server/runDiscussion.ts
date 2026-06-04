@@ -8,8 +8,8 @@ import type { AgentResponse } from "../agents/base.js";
 import type { AgentState } from "../graph/state.js";
 import type { NodeStreamChunk } from "../graph/streamEvents.js";
 import type { buildGraph } from "../graph/builder.js";
-import * as sse from "./sse.js";
-import * as chatStore from "../database/chatStore.js";
+import * as sseServer from "./sseServer.js";
+import * as chatStore from "../database/chat/chatStore.js";
 import { getLogger } from "../utils/logger.js";
 
 const logger = getLogger("server.runDiscussion");
@@ -55,12 +55,13 @@ export async function runDiscussion(
     });
 
 
-    // 拿到 graph 的输出后用 sse.send 转发成 SSE 事件推给前端
+    // 拿到 graph 的输出后用 sseServer.send 转发成 SSE 事件推给前端
     for await (const item of stream) {
       const [mode, chunk] = item as [string, unknown];
       if (mode === "custom") {
         const event = chunk as NodeStreamChunk;
-        sse.send(sessionId, event.kind, event);
+        // 通过 sse 的 ServerResponse 对象把事件推给前端;事件类型就是 event.kind,事件数据就是整个 event 对象(前端 JSON.parse 后读 event.kind 路由到对应 handler,其余字段照旧)。
+        sseServer.send(sessionId, event.kind, event);
       } else {
         finalState = chunk as AgentState;
       }
@@ -69,7 +70,7 @@ export async function runDiscussion(
     // 被打断:丢弃本轮(不落库,保留上一轮记忆),发 round_done 让前端恢复输入。
     if (signal?.aborted) {
       logger.info(`[runDiscussion] 会话 ${sessionId} 被用户打断,本轮不落库`);
-      sse.send(sessionId, "round_done", { done: false, interrupted: true });
+      sseServer.send(sessionId, "round_done", { done: false, interrupted: true });
       return;
     }
 
@@ -78,15 +79,15 @@ export async function runDiscussion(
     const finalMessages = finalState.messages ?? seedMessages;
     const newTurns = finalMessages.slice(priorMessages.length);
     await chatStore.appendMessages(sessionId, newTurns);
-    sse.send(sessionId, "round_done", { done: finalState.done ?? false });
+    sseServer.send(sessionId, "round_done", { done: finalState.done ?? false });
   } catch (exc) {
     // abort 会让 graph.stream 抛错:这是预期的打断,不当成错误,丢弃本轮、发 round_done。
     if (signal?.aborted) {
       logger.info(`[runDiscussion] 会话 ${sessionId} 被用户打断(stream 抛出),本轮不落库`);
-      sse.send(sessionId, "round_done", { done: false, interrupted: true });
+      sseServer.send(sessionId, "round_done", { done: false, interrupted: true });
       return;
     }
     logger.error(`[runDiscussion] 会话 ${sessionId} 出错: ${String(exc)}`);
-    sse.send(sessionId, "error", { message: String(exc) });
+    sseServer.send(sessionId, "error", { message: String(exc) });
   }
 }
