@@ -31,6 +31,8 @@ export const echoTool = tool(
     name: "echo",
     description:
       "调用命令行 echo 把一段文本原样回显出来。参数 text：要回显的文本。",
+    // 只回显文本、不过 shell，无副作用，风险低
+    metadata: { risk: "low" },
     schema: z.object({
       text: z.string().describe("要回显的文本"),
     }),

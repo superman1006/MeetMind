@@ -19,6 +19,7 @@ import { echoTool } from "./echoTool.js";
 import { processTool } from "./processTool.js";
 import { listDirTool } from "./listDirTool.js";
 import { readFileTool } from "./readFileTool.js";
+import { fileEditTool } from "./fileEditTool.js";
 import { webFetchTool } from "./webFetchTool.js";
 
 /** 工具登记表：register(tool) 往 allTools 数组里 push。 */
@@ -37,6 +38,7 @@ toolRegister.register(echoTool);
 toolRegister.register(processTool);
 toolRegister.register(listDirTool);
 toolRegister.register(readFileTool);
+toolRegister.register(fileEditTool);
 toolRegister.register(webFetchTool);
 
 // 与 toolRegister.allTools 同引用；MCP 工具稍后由 initMcpTools() 追加进这同一个数组。

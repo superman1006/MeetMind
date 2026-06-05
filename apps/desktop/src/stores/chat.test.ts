@@ -165,6 +165,35 @@ describe("chat store — turnEnded 标记", () => {
   });
 });
 
+describe("chat store — 工具审批挂起状态", () => {
+  it("默认无挂起审批", () => {
+    const chat = useChatStore();
+    expect(chat.pendingApprovalOf("s1")).toBe(null);
+  });
+
+  it("setPendingApproval 登记、clearPendingApproval 清除", () => {
+    const chat = useChatStore();
+    chat.setPendingApproval("s1", { turnId: "backend-1", approvalId: "backend-1-0", tool: "web_fetch", risk: "medium" });
+    expect(chat.pendingApprovalOf("s1")).toMatchObject({ tool: "web_fetch", risk: "medium", approvalId: "backend-1-0" });
+    chat.clearPendingApproval("s1");
+    expect(chat.pendingApprovalOf("s1")).toBe(null);
+  });
+
+  it("finishRound 清掉残留的挂起审批(审批条不跨轮)", () => {
+    const chat = useChatStore();
+    chat.setPendingApproval("s1", { turnId: "backend-1", approvalId: "backend-1-0", tool: "web_fetch", risk: "medium" });
+    chat.finishRound("s1");
+    expect(chat.pendingApprovalOf("s1")).toBe(null);
+  });
+
+  it("drop 清掉某会话的挂起审批", () => {
+    const chat = useChatStore();
+    chat.setPendingApproval("s1", { turnId: "backend-1", approvalId: "backend-1-0", tool: "web_fetch", risk: "medium" });
+    chat.drop("s1");
+    expect(chat.pendingApprovalOf("s1")).toBe(null);
+  });
+});
+
 describe("shouldShowTailThinking — 尾部「思考中」显示规则", () => {
   it("不 busy 时永远不显示", () => {
     expect(shouldShowTailThinking(false, [])).toBe(false);

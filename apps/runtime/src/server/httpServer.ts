@@ -2,13 +2,20 @@
 // 对外开两个窗口:POST /api(一问一答的 JSON-RPC) 和 GET /events(订阅式长连 SSE)。
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 
-import type { buildGraph } from "../graph/builder.js";
-import { handleRpc, type RpcRequest } from "./rpcServer.js";
+import { handleRpc, type RpcRequest, type GraphHolder } from "./rpcServer.js";
 import { addClient, removeClient } from "./sseServer.js";
 import { getLogger } from "../utils/logger.js";
 
 const logger = getLogger("server.http");
-type CompiledGraph = ReturnType<typeof buildGraph>;
+
+// 日志脱敏:model.set / model.test 的 params 里带 apiKey,落日志前替换成 ***,避免明文进终端/文件。
+function redactParamsForLog(params: Record<string, unknown> | undefined): Record<string, unknown> {
+  const safe: Record<string, unknown> = { ...(params ?? {}) };
+  if (typeof safe.apiKey === "string" && safe.apiKey) {
+    safe.apiKey = "***";
+  }
+  return safe;
+}
 
 // 给响应加 CORS 头:浏览器默认只准网页找“同源”服务器要数据,这几行表示“我允许跨源来访问”。
 // 开发期 Vite 代理已让前后端同源用不太上,主要是给 Tauri 打包后的窗口用。
@@ -28,7 +35,7 @@ async function readBody(req: IncomingMessage): Promise<string> {
 }
 
 // 处理 POST /api:读出请求体 → 解析 → 交给 handleRpc 干活 → 把结果写回前端。
-async function handleApi(graph: CompiledGraph, req: IncomingMessage, res: ServerResponse): Promise<void> {
+async function handleApi(graph: GraphHolder, req: IncomingMessage, res: ServerResponse): Promise<void> {
   // 把前端送来的 JSON 文本完整读出来。
   const raw = await readBody(req);
 
@@ -44,9 +51,9 @@ async function handleApi(graph: CompiledGraph, req: IncomingMessage, res: Server
     return;
   }
 
-  // 打印「收到的请求」:HTTP 方法 + 路径 + JSON-RPC 方法 + id + 请求体参数。
+  // 打印「收到的请求」:HTTP 方法 + 路径 + JSON-RPC 方法 + id + 请求体参数(apiKey 已脱敏)。
   logger.info(
-    { url: "/api", httpMethod: req.method ?? "POST", rpcMethod: body.method, id: body.id ?? null, params: body.params ?? {} },
+    { url: "/api", httpMethod: req.method ?? "POST", rpcMethod: body.method, id: body.id ?? null, params: redactParamsForLog(body.params) },
     "← 收到请求",
   );
 
@@ -98,7 +105,7 @@ function handleEvents(req: IncomingMessage, res: ServerResponse): void {
 
 
 // 启动服务器并监听端口。createServer 的回调“每来一个请求”就跑一次:req=进来的请求,res=用来写回响应。
-export function startServer(graph: CompiledGraph, port: number): void {
+export function startServer(graph: GraphHolder, port: number): void {
   const server = createServer((req, res) => {
     // 每来一个 HTTP 请求，就执行一次这个回调函数
     // 根据 method、pathname 分到 /api、/events 等

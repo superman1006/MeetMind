@@ -1,0 +1,50 @@
+- generic [ref=e31]:
+  - complementary [ref=e32]:
+    - generic [ref=e33]:
+      - generic [ref=e34]: 会话
+      - generic [ref=e35]:
+        - button "模型配置" [ref=e37] [cursor=pointer]:
+          - img [ref=e38]
+        - button "搜索会话" [ref=e42] [cursor=pointer]:
+          - img [ref=e43]
+        - button "收缩会话列表" [ref=e47] [cursor=pointer]:
+          - img [ref=e48]
+    - button "+ 新会话" [ref=e50] [cursor=pointer]
+    - list [ref=e51]:
+      - listitem [ref=e52] [cursor=pointer]:
+        - generic [ref=e53]: 会话 4
+      - listitem [ref=e54] [cursor=pointer]:
+        - generic [ref=e55]: 会话 3
+      - listitem [ref=e56] [cursor=pointer]:
+        - generic [ref=e57]: 会话 3
+      - listitem [ref=e58] [cursor=pointer]:
+        - generic [ref=e59]: template
+    - generic [ref=e60]:
+      - button "登出 admin" [ref=e62] [cursor=pointer]:
+        - generic [ref=e63]: A
+        - generic [ref=e64]: admin
+      - button "☀️" [ref=e65] [cursor=pointer]
+  - generic [ref=e66]:
+    - generic [ref=e67]: 会话 4
+    - generic [ref=e68]:
+      - generic [ref=e70]:
+        - generic [ref=e72]: 用户
+        - generic [ref=e73]: 你是什么模型
+        - time [ref=e74]: 2026-6-5 11:33
+      - generic [ref=e76]:
+        - generic [ref=e78]: 架构师（项目老大）
+        - generic [ref=e79]: 我是 Claude，由 Anthropic 开发的 AI 助手。当前在这个团队里担任架构师角色，负责调度和协调。
+        - time [ref=e80]: 2026-6-5 11:33
+      - generic [ref=e82]:
+        - generic [ref=e84]: 用户
+        - generic [ref=e85]: 输出我和你的对话
+        - time [ref=e86]: 2026-6-5 11:35
+      - generic [ref=e88]:
+        - generic [ref=e90]: 架构师（项目老大）
+        - generic [ref=e91]: 以上就是我们本次对话的全部内容，共4轮。没有其他需要补充的了。
+        - time [ref=e92]: 2026-6-5 11:35
+    - generic [ref=e93]:
+      - textbox "输入项目需求… (Enter 发送, Shift+Enter 换行)" [ref=e94]
+      - button "发送" [ref=e95] [cursor=pointer]:
+        - generic [ref=e96]: 发送
+      - button "结束" [ref=e97] [cursor=pointer]

@@ -1,0 +1,14 @@
+- generic [ref=e99]:
+  - generic [ref=e100]:
+    - generic [ref=e101]: M
+    - heading "MeetMind" [level=1] [ref=e102]
+    - paragraph [ref=e103]: 多 Agent 协作讨论 · 请登录
+  - generic [ref=e104]:
+    - generic [ref=e105]: 用户名
+    - textbox "用户名" [ref=e106]:
+      - /placeholder: 请输入用户名
+  - generic [ref=e107]:
+    - generic [ref=e108]: 密码
+    - textbox "密码" [ref=e109]:
+      - /placeholder: 请输入密码
+  - button "登 录" [disabled] [ref=e110]

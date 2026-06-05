@@ -2,12 +2,12 @@
  * 会话 / 消息持久化（PostgreSQL）。
  *
  * 两张表（建在与 agent 表同一个 pool 上，名字用 `<prefix>_sessions` / `<prefix>_messages`）：
- *   sessions (id text 主键, title text, created_at timestamptz)
+ *   sessions (id text 主键, title text, created_at timestamptz, ended boolean, owner text=归属用户名)
  *   messages (id bigserial 主键, session_id text → sessions(id) ON DELETE CASCADE,
  *             seq int, 以及一条 AgentResponse 的六字段)
  *
  * 一条 messages 行 = 一条 AgentResponse。删 session 行时 messages 靠外键级联自动删除。
- * 单用户 demo：会话是全局的，不挂 user（鉴权以后再加 user_id）。
+ * 按 owner（用户名）隔离：每个会话挂在创建它的用户名下，listSessions 只返回该用户自己的会话。
  * session id 在 Node 里用 crypto.randomUUID() 生成，免装 uuid 相关扩展。
  */
 
@@ -46,12 +46,24 @@ export async function ensureChatTables(): Promise<void> {
     `  id TEXT PRIMARY KEY,` +
     `  title TEXT NOT NULL,` +
     `  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),` +
-    `  ended BOOLEAN NOT NULL DEFAULT false` +
+    `  ended BOOLEAN NOT NULL DEFAULT false,` +
+    `  owner TEXT NOT NULL` +
     `)`;
   await pool.query(createSessionsSql);
 
   // 兼容旧表:ended 列可能不存在,补上(幂等)
   await pool.query(`ALTER TABLE ${sessions} ADD COLUMN IF NOT EXISTS ended BOOLEAN NOT NULL DEFAULT false`);
+
+  // 兼容旧表:owner 列(会话归属用户名)可能不存在。先带 DEFAULT 'admin' 补列——把历史无主会话回填给种子用户 admin;
+  // 再 DROP DEFAULT,使此后新建会话必须显式带 owner(漏传直接报错,而不是静默落到 admin)。新库这两步是 no-op。
+  await pool.query(`ALTER TABLE ${sessions} ADD COLUMN IF NOT EXISTS owner TEXT NOT NULL DEFAULT 'admin'`);
+  await pool.query(`ALTER TABLE ${sessions} ALTER COLUMN owner DROP DEFAULT`);
+
+  // 列表按 owner 过滤,给 owner 建索引
+  const ownerIndexSql =
+    `CREATE INDEX IF NOT EXISTS ${sessions}_owner_idx ` +
+    `ON ${sessions} (owner)`;
+  await pool.query(ownerIndexSql);
 
   const createMessagesSql =
     `CREATE TABLE IF NOT EXISTS ${messages} (` +
@@ -82,31 +94,42 @@ export async function ensureChatTables(): Promise<void> {
   await pool.query(indexSql);
 }
 
-/** 新建一个会话，返回其元信息。 */
-export async function createSession(title: string): Promise<SessionMeta> {
+/** 新建一个会话(归属 owner 用户名)，返回其元信息。 */
+export async function createSession(title: string, owner: string): Promise<SessionMeta> {
   const pool = getPgPool();
   const id = randomUUID();
   const insertSql =
-    `INSERT INTO ${sessionsTable()} (id, title) VALUES ($1, $2) ` +
+    `INSERT INTO ${sessionsTable()} (id, title, owner) VALUES ($1, $2, $3) ` +
     `RETURNING id, title, created_at`;
-  const result = await pool.query(insertSql, [id, title]);
+  const result = await pool.query(insertSql, [id, title, owner]);
   const row = result.rows[0];
   // 新建会话必然未结束,ended 直接 false(DB 默认值也是 false)。
   return { id: row.id, title: row.title, created_at: String(row.created_at), ended: false };
 }
 
-/** 列出所有会话，最近创建的在前。 */
-export async function listSessions(): Promise<SessionMeta[]> {
+/** 列出某用户(owner)自己的会话，最近创建的在前。 */
+export async function listSessions(owner: string): Promise<SessionMeta[]> {
   const pool = getPgPool();
   const selectSql =
     `SELECT id, title, created_at, ended FROM ${sessionsTable()} ` +
-    `ORDER BY created_at DESC`;
-  const result = await pool.query(selectSql);
+    `WHERE owner = $1 ORDER BY created_at DESC`;
+  const result = await pool.query(selectSql, [owner]);
   const metas: SessionMeta[] = [];
   for (const row of result.rows) {
     metas.push({ id: row.id, title: row.title, created_at: String(row.created_at), ended: row.ended === true });
   }
   return metas;
+}
+
+/** 取某会话的归属用户名(owner)。未知会话返回空串。用于按会话主人加载其个人记忆。 */
+export async function getSessionOwner(sessionId: string): Promise<string> {
+  const pool = getPgPool();
+  const selectSql = `SELECT owner FROM ${sessionsTable()} WHERE id = $1`;
+  const result = await pool.query(selectSql, [sessionId]);
+  if (result.rows.length === 0) {
+    return "";
+  }
+  return result.rows[0].owner ?? "";
 }
 
 /** 取某会话的全部消息，按 seq 升序。未知会话返回空数组。 */

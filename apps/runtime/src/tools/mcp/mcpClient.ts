@@ -92,8 +92,6 @@ function jsonSchemaObjectToZod(schema: Record<string, unknown>): z.ZodObject<z.Z
 
 /**
  * 把 MCP 工具返回值收敛成纯文本，并把所有换行换成空格。
- * web 搜索（AIsearch）的结果带大量 \n，落进前端工具结果面板里会被一堆空行撑散、
- * 正文被顶到下面（和 web_fetch 之前的毛病同源）；这里把换行全换成空格，既紧凑又不让词粘连。
  */
 export function mcpResultToText(out: unknown): string {
   let text: string;
@@ -107,7 +105,7 @@ export function mcpResultToText(out: unknown): string {
 }
 
 /**
- * LangChain 要求工具的 schema 是 zod schema，所以需要将 MCP 工具的 schema 转换为 zod schema
+ * LangChain 要求工具的 schema参数的类型是 zod schema，所以需要将 MCP 工具的 schema 转换为 zod schema
  */
 function wrapMcpToolWithZod(mcpTool: StructuredToolInterface): StructuredToolInterface {
   // 获取 MCP 工具的 schema
@@ -134,6 +132,8 @@ function wrapMcpToolWithZod(mcpTool: StructuredToolInterface): StructuredToolInt
     {
       name: mcpTool.name,
       description: mcpTool.description ?? "",
+      // 走外部 MCP 服务、调用公网（如 web 搜索），风险中等
+      metadata: { risk: "medium" },
       schema: zodSchema,
     },
   );

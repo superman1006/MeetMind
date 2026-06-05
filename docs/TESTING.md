@@ -28,12 +28,12 @@ pnpm --filter @meetmind/runtime exec vitest      # watch 模式调试
 
 ```
         /  E2E  \        Playwright 手动实操(改动验收时跑,不进 CI 门禁)
-       / 集成测试 \       rpc 总机 / runDiscussion(假 graph)/ meetingSummary
+       / 集成测试 \       rpc 总机 / runExecution(假 graph)/ meetingSummary
       /  单元测试   \      路由 / 工具函数 / 切块 / 数据层(mock pg)/ stores / api 客户端
 ```
 
 - **单元测试(主力)**:纯函数、状态机、数据映射。快、稳、定位精确。
-- **集成测试(少量)**:`rpc.handleRpc` 用假 graph + 打桩 chatStore;`runDiscussion` 用假 graph 流。
+- **集成测试(少量)**:`rpc.handleRpc` 用假 graph + 打桩 chatStore;`runExecution` 用假 graph 流。
 - **E2E(人工)**:`pnpm dev:runtime` + `pnpm dev:desktop`,浏览器(Playwright 连 5173)实操,见各 spec 的「验证」节。不纳入自动化门禁。
 
 ### 约定(重要)
@@ -73,7 +73,7 @@ pnpm --filter @meetmind/runtime exec vitest      # watch 模式调试
 | `database/splitters` | `splitJson` 透传 / `splitText`·`splitMarkdown` 切块 / `splitDocs` 按类型分发与兜底 |
 | `database/chatStore` | 全部增删改查 + `seq` 递增 + `ended` 持久化(mock pg) |
 | `server/rpc` | JSON-RPC 总机各 method(已有,含 `chat.end`/`chat.send` 的 ended 守卫) |
-| `server/{sessions,sse,runDiscussion,meetingSummary}`、`agents/streamStructured` | 已有 |
+| `server/{sessions,sse,runExecution,meetingSummary}`、`agents/streamStructured` | 已有 |
 
 ### Desktop(`apps/desktop`,33 例 / 6 文件)
 

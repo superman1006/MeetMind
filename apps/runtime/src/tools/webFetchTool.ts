@@ -107,6 +107,8 @@ export const webFetchTool = tool(
       "当你需要查阅公网上某个具体网页 / 文档 / API 返回的内容时调用。" +
       "参数 url：要抓取的完整网址（需带 http:// 或 https:// 前缀）。" +
       `内容超过 ${_MAX_CHARS} 个字符会被截断。`,
+    // 会向公网任意 URL 发请求（SSRF / 信息外泄面），风险中等
+    metadata: { risk: "medium" },
     schema: z.object({
       url: z.string().describe("要抓取的完整网址，需带 http:// 或 https:// 前缀"),
     }),

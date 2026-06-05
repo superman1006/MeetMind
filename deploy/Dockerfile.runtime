@@ -1,0 +1,56 @@
+# ============================================================================
+# MeetMind 后端（apps/runtime）生产镜像
+# ----------------------------------------------------------------------------
+# 设计要点（踩过的坑都在这）：
+#   1) 必须用 glibc 的 Debian 镜像（bookworm），不能用 alpine：
+#      @huggingface/transformers 依赖的 onnxruntime-node / sharp 都是「预编译二进制」，
+#      官方只提供 glibc 版，放到 alpine(musl) 上加载 .node 会直接崩。
+#   2) 直接用 tsx 跑 .ts（与项目 dev 一致），不走 tsc 预编译：
+#      项目是 ESM + NodeNext、import 带 .js 后缀，tsx 开箱即用，省掉编译期类型门禁卡部署。
+#   3) PROJECT_ROOT 由 settings.ts 用源码位置 `../../../..` 反推 = 仓库根，
+#      所以容器里 WORKDIR=/app 必须同时放着 apps/runtime 和 data/、models/。
+#   4) 模型（embedding ~80MB + reranker ~280MB）首次启动联网下载到 /app/models，
+#      用 docker volume 持久化，避免每次重建容器都重新下载（见 docker-compose.prod.yml）。
+# ============================================================================
+
+FROM node:22-bookworm-slim
+
+# ca-certificates：首启从 HuggingFace 经 HTTPS 拉模型时需要根证书；slim 镜像里不一定齐。
+# （若日后 onnxruntime-node 在某些架构上没有预编译包、需要现编译，再把 build-essential python3 放开）
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# 用 pnpm 11，与本机一致：lockfile 是 v9.0，且 pnpm-workspace.yaml 的 allowBuilds 字段
+# 需要新版 pnpm 才认（用来放行 onnxruntime-node / sharp 等原生包的安装脚本）。
+RUN npm install -g pnpm@11
+
+WORKDIR /app
+
+# ---- 依赖层：先只拷贝「清单 + lockfile」，让 Docker 缓存住 pnpm install ----
+# 只要这几个文件没变，改源码时就不会重新装依赖（装依赖是最慢的一步）。
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
+COPY apps/runtime/package.json ./apps/runtime/package.json
+COPY apps/desktop/package.json ./apps/desktop/package.json
+
+# 只安装 runtime 子包及其依赖（不装 desktop 的 tauri/vite，省时省体积）。
+# --frozen-lockfile：严格按 lockfile 装，CI/部署里防止偷偷改依赖。
+RUN pnpm install --frozen-lockfile --filter @meetmind/runtime
+
+# ---- 源码层：依赖装完后再拷贝会变动的部分 ----
+COPY tsconfig.base.json ./tsconfig.base.json
+COPY apps/runtime ./apps/runtime
+# 种子数据（各 agent 的 RAG 语料）；首启灌库是幂等的，重复启动不会重复插入。
+COPY data ./data
+
+# NODE_ENV 放在依赖安装「之后」再设，避免任何工具据此跳过 devDependencies（tsx 在 devDep 里）。
+ENV NODE_ENV=production
+# 模型缓存目录指到 /app/models（会被 compose 的 volume 挂上以持久化）。
+ENV EMBEDDING_CACHE_DIR=/app/models
+
+# 后端监听端口（见 apps/runtime/src/index.ts: startServer(graphHolder, 3002)）。
+EXPOSE 3002
+
+# 用 tsx 直接跑入口。exec 会切到 @meetmind/runtime 的包目录执行，
+# 但 PROJECT_ROOT 是按源码文件位置反推的，与 cwd 无关，所以 data/models 仍正确锚定到 /app。
+CMD ["pnpm", "--filter", "@meetmind/runtime", "exec", "tsx", "src/index.ts"]

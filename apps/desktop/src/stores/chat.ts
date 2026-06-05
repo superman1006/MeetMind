@@ -74,6 +74,14 @@ export interface SummaryState {
 /** 关闭态的整理弹窗默认值(getter 在该会话从未结束过时返回它)。 */
 const CLOSED_SUMMARY: SummaryState = { open: false, status: "summarizing", message: "", detail: "" };
 
+/** 一个挂起的工具审批(每会话至多一个);由 SSE 的 tool_approval_request 事件驱动。 */
+export interface PendingApproval {
+  turnId: string;
+  approvalId: string;
+  tool: string;
+  risk: string;
+}
+
 interface ChatState {
   bubblesBySession: Record<string, Bubble[]>;
   busyBySession: Record<string, boolean>;
@@ -81,6 +89,8 @@ interface ChatState {
   endedBySession: Record<string, boolean>;
   // 各会话的「会议纪要整理」弹窗状态;由 SSE 的 summary_* 事件驱动(全局订阅,见 App.vue)。
   summaryBySession: Record<string, SummaryState>;
+  // 各会话挂起的工具审批;有值时输入框上方弹审批条,用户拍板后清除。
+  pendingApprovalBySession: Record<string, PendingApproval | null>;
 }
 
 export const useChatStore = defineStore("chat", {
@@ -89,12 +99,14 @@ export const useChatStore = defineStore("chat", {
     busyBySession: {},
     endedBySession: {},
     summaryBySession: {},
+    pendingApprovalBySession: {},
   }),
   getters: {
     bubblesOf: (state) => (sessionId: string) => state.bubblesBySession[sessionId] ?? [],
     isBusy: (state) => (sessionId: string) => state.busyBySession[sessionId] ?? false,
     isEnded: (state) => (sessionId: string) => state.endedBySession[sessionId] ?? false,
     summaryOf: (state) => (sessionId: string) => state.summaryBySession[sessionId] ?? CLOSED_SUMMARY,
+    pendingApprovalOf: (state) => (sessionId: string) => state.pendingApprovalBySession[sessionId] ?? null,
   },
   actions: {
     ensure(sessionId: string): void {
@@ -180,8 +192,18 @@ export const useChatStore = defineStore("chat", {
         }
       }
     },
+    /** 收到 tool_approval_request:登记本会话挂起的工具审批,输入框上方据此弹审批条。 */
+    setPendingApproval(sessionId: string, p: PendingApproval): void {
+      this.pendingApprovalBySession[sessionId] = p;
+    },
+    /** 用户已拍板(或本轮结束/打断):清掉本会话的挂起审批,审批条消失。 */
+    clearPendingApproval(sessionId: string): void {
+      this.pendingApprovalBySession[sessionId] = null;
+    },
     finishRound(sessionId: string): void {
       this.busyBySession[sessionId] = false;
+      // 本轮结束/打断:清掉可能残留的挂起审批,审批条不该跨轮存在。
+      this.pendingApprovalBySession[sessionId] = null;
       // 本轮结束(正常跑完或被用户打断):删掉末尾那个「已建但一个字都没吐出」的 agent 占位气泡。
       // 它的 text 为空 → MessageBubble 会一直显示流动点(thinking),不删就停不下来。
       // 被打断的本轮本就不落库,删掉这种空气泡正合适。
@@ -279,6 +301,7 @@ export const useChatStore = defineStore("chat", {
       delete this.busyBySession[sessionId];
       delete this.endedBySession[sessionId];
       delete this.summaryBySession[sessionId];
+      delete this.pendingApprovalBySession[sessionId];
     },
     addErrorBubble(sessionId: string, message: string): void {
       this.ensure(sessionId);

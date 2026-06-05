@@ -10,13 +10,14 @@ import type { NodeStreamChunk } from "../graph/streamEvents.js";
 import type { buildGraph } from "../graph/builder.js";
 import * as sseServer from "./sseServer.js";
 import * as chatStore from "../database/chat/chatStore.js";
+import * as userStore from "../database/users/userStore.js";
 import { getLogger } from "../utils/logger.js";
 
-const logger = getLogger("server.runDiscussion");
+const logger = getLogger("server.runExecution");
 
 type CompiledGraph = ReturnType<typeof buildGraph>;
 
-export async function runDiscussion(
+export async function runExecution(
   graph: CompiledGraph,
   sessionId: string,
   requirement: string,
@@ -38,8 +39,17 @@ export async function runDiscussion(
     const priorMessages = await chatStore.getMessages(sessionId);
     const seedMessages = [...priorMessages, userTurn];
 
+    // 按会话主人(owner=用户名)加载其个人记忆，本轮整轮共用，拼到各 agent 的 systemPrompt 最前面。
+    // 取不到 owner / 没写过记忆都回空串，memorySection 据此不加任何内容。
+    const owner = await chatStore.getSessionOwner(sessionId);
+    let userMemory = "";
+    if (owner) {
+      userMemory = await userStore.getMemory(owner);
+    }
+
     const initialState: AgentState = {
       requirement,
+      userMemory,
       messages: seedMessages,
       next_agent: null,
       done: false,
@@ -69,7 +79,7 @@ export async function runDiscussion(
 
     // 被打断:丢弃本轮(不落库,保留上一轮记忆),发 round_done 让前端恢复输入。
     if (signal?.aborted) {
-      logger.info(`[runDiscussion] 会话 ${sessionId} 被用户打断,本轮不落库`);
+      logger.info(`[runExecution] 会话 ${sessionId} 被用户打断,本轮不落库`);
       sseServer.send(sessionId, "round_done", { done: false, interrupted: true });
       return;
     }
@@ -83,11 +93,11 @@ export async function runDiscussion(
   } catch (exc) {
     // abort 会让 graph.stream 抛错:这是预期的打断,不当成错误,丢弃本轮、发 round_done。
     if (signal?.aborted) {
-      logger.info(`[runDiscussion] 会话 ${sessionId} 被用户打断(stream 抛出),本轮不落库`);
+      logger.info(`[runExecution] 会话 ${sessionId} 被用户打断(stream 抛出),本轮不落库`);
       sseServer.send(sessionId, "round_done", { done: false, interrupted: true });
       return;
     }
-    logger.error(`[runDiscussion] 会话 ${sessionId} 出错: ${String(exc)}`);
+    logger.error(`[runExecution] 会话 ${sessionId} 出错: ${String(exc)}`);
     sseServer.send(sessionId, "error", { message: String(exc) });
   }
 }

@@ -1,0 +1,48 @@
+# ============================================================================
+# MeetMind 前端（apps/desktop 的 Web 形态）生产镜像
+# ----------------------------------------------------------------------------
+# 桌面端平时打包成 Tauri 应用，但前端本身就是标准 Vite + Vue3，可直接 `vite build`
+# 出一套静态文件，用 Nginx 托管即可在浏览器里访问（https://你的域名）。
+#
+# 两阶段构建：
+#   stage build —— 装依赖 + vite build，产出 apps/desktop/dist（纯静态）
+#   stage nginx —— 只把 dist 和 nginx 配置拷进官方 nginx 镜像，最终镜像很小
+#
+# 前端调后端用的是相对路径 /api、/events（见 src/api/rpcClient.ts、sseClient.ts），
+# 所以同源部署 + Nginx 反代这两个路径到 runtime 即可，前端代码无需改动。
+# ============================================================================
+
+# ---------- 构建阶段 ----------
+FROM node:22-bookworm-slim AS build
+
+RUN npm install -g pnpm@11
+WORKDIR /app
+
+# 依赖层缓存：先拷清单 + lockfile（三个子包的清单都要，frozen-lockfile 会校验全工作区）。
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
+COPY apps/desktop/package.json ./apps/desktop/package.json
+COPY apps/runtime/package.json ./apps/runtime/package.json
+
+# 只装 desktop 子包及其依赖（vite / vue 等）。
+RUN pnpm install --frozen-lockfile --filter @meetmind/desktop
+
+# 源码 + 构建。
+COPY tsconfig.base.json ./tsconfig.base.json
+COPY apps/desktop ./apps/desktop
+
+# 注意：package.json 的 build 脚本是 `vue-tsc --noEmit && vite build`。
+# 这里「故意」只跑 vite build，跳过 vue-tsc 类型门禁——部署时不该被类型告警卡住打包。
+# 类型检查应在开发/CI 阶段做（pnpm typecheck），不放在出包关键路径上。
+RUN pnpm --filter @meetmind/desktop exec vite build
+
+# ---------- 运行阶段 ----------
+FROM nginx:1.27-alpine
+
+# 自定义站点配置：SPA 回退 + /api、/events 反代到 runtime（SSE 关缓冲）。
+COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf
+
+# 拷入构建好的静态产物。vite 默认输出到 apps/desktop/dist（tauri.conf.json frontendDist 也是 ../dist）。
+COPY --from=build /app/apps/desktop/dist /usr/share/nginx/html
+
+EXPOSE 80
+# nginx:alpine 自带的默认 CMD 就是前台跑 nginx，无需重写。

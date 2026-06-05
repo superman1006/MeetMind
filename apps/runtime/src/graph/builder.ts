@@ -27,6 +27,7 @@ import {
 } from "../config/constants.js";
 import { printAgentInfo } from "../utils/utils.js";
 import { getLogger } from "../utils/logger.js";
+import * as toolApprovals from "../server/toolApprovals.js";
 import { routeToWhichAgent } from "./route.js";
 import {
   AgentStateAnnotation,
@@ -83,7 +84,12 @@ function createNode(agent: BaseAgent) {
     let onToolUse: ((toolName: string) => void) | undefined = undefined;
     // onToolResult:每次工具执行完成后调一次，带 name/args/result，转发成 tool_result 事件供前端加按钮 + 展开结果。
     let onToolResult: ((rec: ToolCallRecord) => void) | undefined = undefined;
+    // onToolApproval:risk>low 的工具执行前调一次，发 tool_approval_request 事件并 await 用户决策。
+    let onToolApproval:
+      | ((info: { toolName: string; risk: string; args: Record<string, unknown> }) => Promise<boolean>)
+      | undefined = undefined;
     const toolsUsed: string[] = []; // 本轮用过的工具名(去重),用于落库 + 前端常驻标签
+    let approvalSeq = 0; // 本轮（本节点）审批编号自增计数器，拼出一轮内唯一的 approvalId
     if (writer) {
       onDelta = (text: string) => {
         writer({ kind: "delta", turnId, text });
@@ -103,13 +109,38 @@ function createNode(agent: BaseAgent) {
           result: rec.result,
         });
       };
+      onToolApproval = async (info) => {
+        const approvalId = `${turnId}-${approvalSeq}`;
+        approvalSeq += 1;
+        // 先推事件让前端弹审批框，再挂起等用户决策（打断会经 config.signal 取消挂起）。
+        writer({
+          kind: "tool_approval_request",
+          turnId,
+          approvalId,
+          tool: info.toolName,
+          risk: info.risk,
+          args: info.args,
+        });
+        const approved = await toolApprovals.createPending(approvalId, config.signal);
+        return approved;
+      };
     }
+
+    // 会话主人的个人记忆：本轮开始时已加载进 state，节点这里读出透传给 agent，
+    // 由 invoke 拼到 systemPrompt 最前面。CLI / 未登录场景为空串。
+    const userMemory = state.userMemory ?? "";
 
     let response;
     if (onDelta) {
-      response = await agent.invoke(requirement, history, { onDelta, onToolUse, onToolResult });
+      response = await agent.invoke(requirement, history, {
+        userMemory,
+        onDelta,
+        onToolUse,
+        onToolResult,
+        onToolApproval,
+      });
     } else {
-      response = await agent.invoke(requirement, history);
+      response = await agent.invoke(requirement, history, { userMemory });
     }
 
     // 把本轮用过的工具名挂到 response,随消息落库;前端据此常驻 "UsingTools: <工具名>"

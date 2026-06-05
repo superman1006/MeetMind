@@ -1,0 +1,78 @@
+# ============================================================================
+# MeetMind 生产编排：postgres(pgvector) + runtime(后端) + web(前端 Nginx)
+# ----------------------------------------------------------------------------
+# 用法（在 deploy/ 目录里）：
+#   docker compose -f docker-compose.prod.yml up -d --build
+# 访问： http://<服务器IP>/        （前端走 80 端口，已反代 /api、/events 到后端）
+#
+# 三个容器在同一个 compose 网络里，互相用「服务名」当主机名访问：
+#   - runtime 连库：postgres:5432（容器内部端口，不是宿主机的 5433）
+#   - web 反代后端：runtime:3002
+# ============================================================================
+
+name: meetmind
+
+services:
+  # ---- 数据库：带 pgvector 扩展的 PostgreSQL ----
+  postgres:
+    image: pgvector/pgvector:pg17
+    container_name: meetmind-pg-prod
+    environment:
+      POSTGRES_USER: meetmind
+      POSTGRES_PASSWORD: meetmind
+      POSTGRES_DB: meetmind
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U meetmind -d meetmind"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+    # 默认不对宿主机暴露端口（仅容器网络内可达）。要本机 psql 调试时再放开下面两行：
+    # ports:
+    #   - "5433:5432"
+
+  # ---- 后端：Node + tsx，HTTP/SSE 服务 ----
+  runtime:
+    build:
+      # 构建上下文是「仓库根」（compose 在 deploy/ 里，所以用 ..），才能拿到 pnpm 工作区清单。
+      context: ..
+      dockerfile: deploy/Dockerfile.runtime
+    container_name: meetmind-runtime
+    # 复用仓库根的 .env 提供 LLM 三件套（API_KEY/BASE_URL/MODEL_NAME）等。
+    # 下面 environment 里的同名键会「覆盖」env_file，用来把 PG_URL 指向容器内的 postgres。
+    env_file:
+      - ../.env
+    environment:
+      # 容器内连库：主机名=服务名 postgres，端口是容器内部的 5432（不是宿主机 5433）。
+      PG_URL: postgresql://meetmind:meetmind@postgres:5432/meetmind
+      EMBEDDING_CACHE_DIR: /app/models
+    volumes:
+      # 持久化模型缓存：首启下载 ~360MB，之后重建容器不必重下。
+      - model_cache:/app/models
+      # 持久化会议纪要产物（meetingSummary 会往 data/summary 写文件）。
+      - summary_data:/app/data/summary
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ---- 前端：Nginx 托管静态页 + 反代到 runtime ----
+  web:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.web
+    container_name: meetmind-web
+    ports:
+      # 对外用 80。要上 HTTPS：要么在这台机前面再放一层带证书的反代/负载均衡，
+      # 要么把这里改成 443 并在本 nginx.conf 里挂 ssl 证书（见 deploy/README.md）。
+      - "80:80"
+    depends_on:
+      - runtime
+    restart: unless-stopped
+
+volumes:
+  pg_data:
+  model_cache:
+  summary_data:

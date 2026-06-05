@@ -171,7 +171,7 @@ MeetMind 当前是一个 TypeScript monorepo（`apps/runtime` 后端 + `apps/des
 | 工具体系 | LangChain `tool()` 单例 + `ToolRegister`；现有工具：`rag_search` / `web_fetch` / `read_file` / `list_dir` / `list_processes` / `echo`；MCP 工具异步登记（百度 AI Search） | `tools/*Tool.ts`、`tools/toolRegister.ts`、`tools/mcp/mcpClient.ts` |
 | 会话持久化 | `sessions` / `messages` 两张表；会话增删改查、消息按 `(session_id, seq)` 落库；会话"已结束"状态持久化 | `database/chat/chatStore.ts` |
 | 实时通信 | 单条 SSE firehose（按 sessionId 路由）+ JSON-RPC；流式 delta、工具调用、轮次事件 | `server/sseServer.ts`、`server/rpcServer.ts`、`server/httpServer.ts` |
-| 讨论控制 | 开始讨论（`chat.send`）/ 打断（`chat.interrupt`，AbortController）/ 结束并整理纪要（`chat.end`） | `server/rpcServer.ts`、`server/runDiscussion.ts` |
+| 讨论控制 | 开始讨论（`chat.send`）/ 打断（`chat.interrupt`，AbortController）/ 结束并整理纪要（`chat.end`） | `server/rpcServer.ts`、`server/runExecution.ts` |
 | 会议纪要 | 一次 LLM 调用产出 `minutes` + 各角色工作段；失败降级占位 | `agents/base.ts: summarizeAll`、`server/meetingSummary.ts` |
 | 前端聊天 | 聊天窗口、流式气泡、工具调用展示、思考中占位、会议结束弹窗、会话列表/搜索、**手动重命名**、删除 | `apps/desktop/src/components/*`、`stores/*` |
 | 前端主题 | 浅/深主题切换（含气泡配色随主题切换）；空会话占位提示 | `App.vue`、`stores/ui.ts`、`theme/agentColors.ts` |

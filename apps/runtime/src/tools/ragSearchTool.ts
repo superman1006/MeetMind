@@ -49,6 +49,8 @@ export const ragSearchTool = tool(
   {
     name: "rag_search",
     description,
+    // 只读自己的私有表，无副作用，风险低
+    metadata: { risk: "low" },
     schema: z.object({
       query: z.string().describe("自然语言查询字符串"),
     }),

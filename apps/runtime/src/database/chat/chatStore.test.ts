@@ -16,6 +16,7 @@ import {
   ensureChatTables,
   createSession,
   listSessions,
+  getSessionOwner,
   getMessages,
   appendMessages,
   renameSession,
@@ -41,6 +42,10 @@ describe("ensureChatTables", () => {
     expect(joined).toContain("CREATE TABLE IF NOT EXISTS meetmind_sessions");
     expect(joined).toContain("ended BOOLEAN NOT NULL DEFAULT false");
     expect(joined).toContain("ADD COLUMN IF NOT EXISTS ended");
+    // owner 列:建表带 NOT NULL,旧表迁移先补 DEFAULT 'admin' 再 DROP DEFAULT
+    expect(joined).toContain("owner TEXT NOT NULL");
+    expect(joined).toContain("ADD COLUMN IF NOT EXISTS owner TEXT NOT NULL DEFAULT 'admin'");
+    expect(joined).toContain("ALTER COLUMN owner DROP DEFAULT");
     expect(joined).toContain("CREATE TABLE IF NOT EXISTS meetmind_messages");
   });
 });
@@ -50,7 +55,7 @@ describe("createSession", () => {
     mockQuery.mockResolvedValueOnce({
       rows: [{ id: "uuid-1", title: "我的会话", created_at: new Date("2026-06-01T00:00:00Z") }],
     });
-    const meta = await createSession("我的会话");
+    const meta = await createSession("我的会话", "alice");
     expect(meta.id).toBe("uuid-1");
     expect(meta.title).toBe("我的会话");
     expect(typeof meta.created_at).toBe("string");
@@ -58,24 +63,47 @@ describe("createSession", () => {
 
     const [sql, params] = mockQuery.mock.calls[0];
     expect(String(sql)).toContain("INSERT INTO meetmind_sessions");
-    // 第二个参数是 [生成的 uuid, title]
+    expect(String(sql)).toContain("owner");
+    // 参数是 [生成的 uuid, title, owner]
     expect(params[1]).toBe("我的会话");
+    expect(params[2]).toBe("alice");
   });
 });
 
 describe("listSessions", () => {
-  it("按 created_at 倒序查,ended 转成 boolean", async () => {
+  it("按 owner 过滤、created_at 倒序查,ended 转成 boolean", async () => {
     mockQuery.mockResolvedValueOnce({
       rows: [
         { id: "a", title: "A", created_at: new Date(), ended: true },
         { id: "b", title: "B", created_at: new Date(), ended: false },
       ],
     });
-    const list = await listSessions();
+    const list = await listSessions("alice");
     expect(list).toHaveLength(2);
     expect(list[0]).toMatchObject({ id: "a", title: "A", ended: true });
     expect(list[1].ended).toBe(false);
-    expect(String(mockQuery.mock.calls[0][0])).toContain("ORDER BY created_at DESC");
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(String(sql)).toContain("WHERE owner = $1");
+    expect(String(sql)).toContain("ORDER BY created_at DESC");
+    expect(params).toEqual(["alice"]);
+  });
+});
+
+describe("getSessionOwner", () => {
+  it("命中:按 id 查 owner,回 owner 用户名", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ owner: "alice" }], rowCount: 1 });
+    const owner = await getSessionOwner("s1");
+    expect(owner).toBe("alice");
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(String(sql)).toContain("SELECT owner FROM meetmind_sessions");
+    expect(String(sql)).toContain("WHERE id = $1");
+    expect(params).toEqual(["s1"]);
+  });
+
+  it("未知会话(无返回行) → 回空串", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    const owner = await getSessionOwner("ghost");
+    expect(owner).toBe("");
   });
 });
 

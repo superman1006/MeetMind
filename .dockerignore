@@ -1,0 +1,41 @@
+# Docker 只读取「构建上下文根目录」（这里是仓库根）的 .dockerignore。
+# 把不需要进镜像、或会拖慢构建的东西排除掉，构建上下文越小越快。
+
+# 依赖与产物：镜像里会重新 pnpm install / 构建，本地的不要带进去
+node_modules
+**/node_modules
+dist
+**/dist
+coverage
+**/coverage
+
+# 模型缓存：~360MB，镜像里首启会自己下载（且由 volume 持久化），别打进上下文
+models
+
+# Rust / Tauri 桌面端构建产物（巨大，Web 部署用不到）
+apps/desktop/src-tauri/target
+
+# 机密：.env 不进镜像（运行时由 compose 的 env_file/environment 注入）
+.env
+
+# 版本控制与 IDE / 工具目录
+.git
+.gitignore
+.idea
+.vscode
+.cursor
+.claude
+.understand-anything
+.playwright-mcp
+
+# 文档 / 笔记 / 日志，对运行无影响
+note
+docs
+*.md
+!README.md
+*.log
+logs
+
+# 操作系统垃圾文件
+.DS_Store
+Thumbs.db

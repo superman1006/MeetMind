@@ -6,6 +6,7 @@ const rpcMock = vi.hoisted(() => vi.fn());
 vi.mock("../api/rpcClient.js", () => ({ rpc: rpcMock }));
 
 import { useSessionsStore } from "./sessions.js";
+import { useAuthStore } from "./auth.js";
 
 beforeEach(() => {
   setActivePinia(createPinia());
@@ -13,7 +14,8 @@ beforeEach(() => {
 });
 
 describe("sessions store", () => {
-  it("load 拉列表;无选中时默认选第一个", async () => {
+  it("load 带当前用户名拉列表;无选中时默认选第一个", async () => {
+    useAuthStore().username = "tester";
     rpcMock.mockResolvedValueOnce([
       { id: "a", title: "A", ended: false },
       { id: "b", title: "B", ended: false },
@@ -22,16 +24,18 @@ describe("sessions store", () => {
     await s.load();
     expect(s.list).toHaveLength(2);
     expect(s.activeId).toBe("a");
-    expect(rpcMock).toHaveBeenCalledWith("session.list", {});
+    expect(rpcMock).toHaveBeenCalledWith("session.list", { username: "tester" });
   });
 
-  it("newSession 新建后插到最前并选中,返回新 id", async () => {
+  it("newSession 带当前用户名新建后插到最前并选中,返回新 id", async () => {
+    useAuthStore().username = "tester";
     rpcMock.mockResolvedValueOnce({ id: "new", title: "会话 1", ended: false });
     const s = useSessionsStore();
     const id = await s.newSession();
     expect(id).toBe("new");
     expect(s.list[0].id).toBe("new");
     expect(s.activeId).toBe("new");
+    expect(rpcMock).toHaveBeenCalledWith("session.create", { title: "会话 1", username: "tester" });
   });
 
   it("select 切换 activeId", () => {
@@ -53,6 +57,21 @@ describe("sessions store", () => {
     const s = useSessionsStore();
     await s.rename("a", "   ");
     expect(rpcMock).not.toHaveBeenCalled();
+  });
+
+  it("setTitle:只更新本地标题,不调 rpc", () => {
+    const s = useSessionsStore();
+    s.list = [{ id: "a", title: "旧" }, { id: "b", title: "B" }];
+    s.setTitle("a", "自动标题");
+    expect(s.list[0].title).toBe("自动标题");
+    expect(rpcMock).not.toHaveBeenCalled();
+  });
+
+  it("setTitle:未知 id 不报错、不改动其它项", () => {
+    const s = useSessionsStore();
+    s.list = [{ id: "a", title: "旧" }];
+    s.setTitle("zzz", "x");
+    expect(s.list[0].title).toBe("旧");
   });
 
   it("remove:删当前会话后切到剩余第一个", async () => {

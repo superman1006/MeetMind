@@ -31,6 +31,8 @@ export const listDirTool = tool(
     description:
       "列出指定目录下的文件和子目录。参数 path：要查看的目录路径。" +
       "返回每一项并标注是 [dir] 还是 [file]。",
+    // 只读目录，无副作用，风险低
+    metadata: { risk: "low" },
     schema: z.object({
       path: z.string().describe("要查看的目录路径"),
     }),

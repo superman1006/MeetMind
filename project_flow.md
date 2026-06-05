@@ -90,7 +90,7 @@ handleRpc(graph, { method, params, id })
   │     ├── isSessionEnded? → -32000（会议已结束，DB 持久化的兜底）
   │     ├── isBusy?         → -32000（同会话一次只能跑一轮）
   │     ├── setBusy(true) + new AbortController + setController
-  │     ├── runDiscussion(graph, sessionId, requirement, signal)   # ← 不 await（见第五节）
+  │     ├── runExecution(graph, sessionId, requirement, signal)   # ← 不 await（见第五节）
   │     │     .catch(记日志).finally(清 busy + controller)         # 必须 .catch，否则拖垮进程
   │     └── return { ok:true }
   │
@@ -116,12 +116,12 @@ handleRpc(graph, { method, params, id })
 
 ---
 
-## 五、一轮讨论 `runDiscussion(graph, sessionId, requirement, signal)`
+## 五、一轮讨论 `runExecution(graph, sessionId, requirement, signal)`
 
-`apps/runtime/src/server/runDiscussion.ts`：把图的流式输出转发成 SSE。
+`apps/runtime/src/server/runExecution.ts`：把图的流式输出转发成 SSE。
 
 ```
-runDiscussion()
+runExecution()
   ├── userTurn = { agent_name:"user", role:"用户", message:requirement, next_agent:architect, done:false, used_rag:false }
   ├── priorMessages = await chatStore.getMessages(sessionId)   # 跨轮记忆起点（首轮为空）
   ├── seedMessages  = [...priorMessages, userTurn]
@@ -174,7 +174,7 @@ buildGraph()                          # apps/runtime/src/graph/builder.ts
 
 ## 七、节点执行 `createNode(agent)` 返回的闭包
 
-`apps/runtime/src/graph/builder.ts`。节点跑 agent 并把过程通过 `config.writer` 发成自定义流事件（runDiscussion 转成 SSE）：
+`apps/runtime/src/graph/builder.ts`。节点跑 agent 并把过程通过 `config.writer` 发成自定义流事件（runExecution 转成 SSE）：
 
 ```
 async (state, config) => {...}
@@ -431,7 +431,7 @@ getSettings()                          # apps/runtime/src/config/settings.ts
 
 ## 十七、SSE 事件契约（runtime → desktop）
 
-`runDiscussion` 把节点发的 custom 帧（`apps/runtime/src/graph/streamEvents.ts` 的 `NodeStreamChunk`）按 `kind` 原样转成同名 SSE 事件，外加几个流程事件：
+`runExecution` 把节点发的 custom 帧（`apps/runtime/src/graph/streamEvents.ts` 的 `NodeStreamChunk`）按 `kind` 原样转成同名 SSE 事件，外加几个流程事件：
 
 | SSE event | 何时发 | 负载 |
 |---|---|---|
@@ -454,7 +454,7 @@ getSettings()                          # apps/runtime/src/config/settings.ts
 | `bootstrap.ts` | 启动自检：pingDb / ensureChatTables / 预热 embedding / buildAgentsTables / countDocs |
 | `server/httpServer.ts` | HTTP 服务：POST /api（JSON-RPC）+ GET /events（SSE）|
 | `server/rpc.ts` | `handleRpc` 按 method 分诊（chat.* / session.*）|
-| `server/runDiscussion.ts` | 跑一轮讨论，graph.stream 转 SSE，增量落库 |
+| `server/runExecution.ts` | 跑一轮讨论，graph.stream 转 SSE，增量落库 |
 | `server/sse.ts` | SSE 长连登记表 + `send(sessionId, event, data)` |
 | `server/sessions.ts` | 会话运行时状态：busy 标记 + AbortController（内存）|
 | `server/meetingSummary.ts` | 会议结束整理：summarizeAll → 写 data/summary/<id>.md |
@@ -501,7 +501,7 @@ getSettings()                          # apps/runtime/src/config/settings.ts
    bootstrap                  buildGraph                   startServer(graph, 3002)
         │                           │                            │
         ├── pingDb                  ├── buildAllAgents           ├── POST /api → handleRpc
-        ├── ensureChatTables       │     └── new XxxAgent()      │     ├── chat.send → runDiscussion (不 await)
+        ├── ensureChatTables       │     └── new XxxAgent()      │     ├── chat.send → runExecution (不 await)
         ├── getEmbedderModel       │           ├── RAGRetriever  │     ├── chat.interrupt → controller.abort()
         ├── buildAgentsTables       │           └── ChatOpenAI    │     ├── chat.end → summarizeMeeting (不 await)
         │   └── loadSeedsToPg       │                 +bindTools  │     └── session.*  → chatStore
@@ -509,7 +509,7 @@ getSettings()                          # apps/runtime/src/config/settings.ts
         │       ├── splitDocs       └── addConditionalEdges       └── GET /events → addClient (SSE 长连)
         │       ├── ensureAgentTable          │
         │       ├── embedBatch                ▼
-        │       └── INSERT          runDiscussion → graph.stream(["custom","values"], signal)
+        │       └── INSERT          runExecution → graph.stream(["custom","values"], signal)
         └── countDocs                         │
                                               ▼
                                    createNode(agent) 闭包  ──writer──▶ SSE: turn_start/delta/using_tools/tool_result/turn_end
@@ -527,5 +527,5 @@ getSettings()                          # apps/runtime/src/config/settings.ts
                                               └── Phase2: withStructuredOutput(ModelOutput)
                                                     └── _buildAgentResponse → AgentResponse
                                                           │
-                                              runDiscussion: appendMessages → SSE round_done
+                                              runExecution: appendMessages → SSE round_done
 ```

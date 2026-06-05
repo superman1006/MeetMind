@@ -1,11 +1,21 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { ref, onMounted } from "vue";
 
 // busy: 讨论进行中。此时按钮变成方块"打断"键;否则是"发送"键。
 // ended: 会话已结束。输入框仍可打字,但回车/点发送会被拦截(emit blocked),不真的发出去。
 const props = defineProps<{ busy: boolean; ended: boolean }>();
 const emit = defineEmits<{ send: [text: string]; interrupt: []; end: []; blocked: [] }>();
 const text = ref("");
+// 输入框 DOM 引用:挂载时自动聚焦,父组件(切换/新建会话时)也能通过暴露的 focus() 主动聚焦。
+const inputEl = ref<HTMLTextAreaElement | null>(null);
+
+// 聚焦输入框,让用户打开会话后直接打字、无需先点一下输入框。
+function focus(): void {
+  inputEl.value?.focus();
+}
+
+onMounted(focus);
+defineExpose({ focus });
 
 function submit(): void {
   const value = text.value.trim();
@@ -50,6 +60,7 @@ function onKeydown(e: KeyboardEvent): void {
 <template>
   <div class="composer">
     <textarea
+      ref="inputEl"
       v-model="text"
       placeholder="输入项目需求… (Enter 发送, Shift+Enter 换行)"
       @keydown="onKeydown"

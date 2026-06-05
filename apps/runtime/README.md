@@ -46,7 +46,7 @@ pnpm test               # vitest run
 ```
 index.ts (load .env) → bootstrap() → buildGraph() → startServer(graph, 3002)
                                                           │
-   POST /api ─ handleRpc ─ chat.send ─► runDiscussion(graph, …) ─ graph.stream(["custom","values"])
+   POST /api ─ handleRpc ─ chat.send ─► runExecution(graph, …) ─ graph.stream(["custom","values"])
                                                           │
                        createNode(agent) 闭包 ─► agent.invoke()  ── writer ──► SSE 事件
                             （Phase1 工具循环 + Phase2 结构化收尾）
@@ -168,7 +168,7 @@ src/
 ├── server/
 │   ├── httpServer.ts       # POST /api + GET /events
 │   ├── rpc.ts              # handleRpc 按 method 分诊
-│   ├── runDiscussion.ts    # 跑一轮讨论，graph.stream → SSE，增量落库
+│   ├── runExecution.ts    # 跑一轮讨论，graph.stream → SSE，增量落库
 │   ├── sse.ts              # SSE 长连登记表 + send()
 │   ├── sessions.ts         # 会话运行时状态（busy + AbortController，内存）
 │   └── meetingSummary.ts   # 会议结束整理

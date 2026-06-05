@@ -49,6 +49,8 @@ export const processTool = tool(
     description:
       "调用命令行 ps aux 查看当前主机上正在运行的进程。" +
       "可选参数 filter：只返回命令行 / 用户中含该关键字的进程行（表头始终保留）。",
+    // 只读进程列表、不过 shell，无副作用，风险低
+    metadata: { risk: "low" },
     schema: z.object({
       // OpenAI 兼容的 function-calling 要求可选字段必须同时 nullable，
       // 否则后端报 "uses .optional() without .nullable()"。这里用 nullable+optional。

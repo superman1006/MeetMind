@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { runDiscussion } from "./runDiscussion.js";
+import { runExecution } from "./runExecution.js";
 import * as sse from "./sseServer.js";
 import * as chatStore from "../database/chat/chatStore.js";
+import * as userStore from "../database/users/userStore.js";
 import type { AgentResponse } from "../agents/base.js";
 
 function archTurn(message: string): AgentResponse {
@@ -28,10 +29,10 @@ function fakeGraph(finalMessages: AgentResponse[]) {
       }
       return gen();
     },
-  } as unknown as Parameters<typeof runDiscussion>[0];
+  } as unknown as Parameters<typeof runExecution>[0];
 }
 
-describe("runDiscussion", () => {
+describe("runExecution", () => {
   let sseSpy: ReturnType<typeof vi.spyOn>;
   let appendSpy: ReturnType<typeof vi.spyOn>;
 
@@ -39,6 +40,9 @@ describe("runDiscussion", () => {
     sseSpy = vi.spyOn(sse, "send").mockImplementation(() => {});
     appendSpy = vi.spyOn(chatStore, "appendMessages").mockResolvedValue(undefined);
     vi.spyOn(chatStore, "getMessages").mockResolvedValue([]);
+    // 本轮开始时会按会话主人加载其个人记忆;单测里打桩,避免连真库。
+    vi.spyOn(chatStore, "getSessionOwner").mockResolvedValue("alice");
+    vi.spyOn(userStore, "getMemory").mockResolvedValue("");
   });
 
   afterEach(() => {
@@ -52,7 +56,7 @@ describe("runDiscussion", () => {
     });
 
     const finalMessages = [archTurn("最终结论")];
-    await runDiscussion(fakeGraph(finalMessages), "s1", "做个登录页");
+    await runExecution(fakeGraph(finalMessages), "s1", "做个登录页");
 
     expect(sent).toEqual(["turn_start", "using_tools", "delta", "turn_end", "round_done"]);
     // prior 为空 → 新增 turn = 全部 finalMessages
@@ -71,9 +75,9 @@ describe("runDiscussion", () => {
         }
         return gen();
       },
-    } as unknown as Parameters<typeof runDiscussion>[0];
+    } as unknown as Parameters<typeof runExecution>[0];
 
-    await runDiscussion(graph, "s1", "第二轮需求");
+    await runExecution(graph, "s1", "第二轮需求");
 
     // 起点 = 上一轮历史 + 本轮 user 输入
     expect(capturedSeed).toHaveLength(2);
@@ -84,5 +88,27 @@ describe("runDiscussion", () => {
     const appended = appendSpy.mock.calls[0][1] as AgentResponse[];
     expect(appended).toHaveLength(1);
     expect(appended[0].agent_name).toBe("user");
+  });
+
+  it("按会话主人加载个人记忆,注入到 graph 初始 state.userMemory", async () => {
+    vi.spyOn(chatStore, "getSessionOwner").mockResolvedValue("alice");
+    vi.spyOn(userStore, "getMemory").mockResolvedValue("我喜欢简洁设计");
+
+    let capturedMemory = "<unset>";
+    const graph = {
+      async stream(initial: { userMemory: string; messages: AgentResponse[] }) {
+        capturedMemory = initial.userMemory;
+        async function* gen() {
+          yield ["values", { messages: initial.messages, done: true }];
+        }
+        return gen();
+      },
+    } as unknown as Parameters<typeof runExecution>[0];
+
+    await runExecution(graph, "s1", "做个登录页");
+
+    expect(chatStore.getSessionOwner).toHaveBeenCalledWith("s1");
+    expect(userStore.getMemory).toHaveBeenCalledWith("alice");
+    expect(capturedMemory).toBe("我喜欢简洁设计");
   });
 });

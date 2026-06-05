@@ -1,0 +1,20 @@
+- generic [ref=e2]:
+  - generic [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]: M
+      - heading "MeetMind" [level=1] [ref=e7]
+      - paragraph [ref=e8]: 多 Agent 协作讨论 · 请登录
+    - generic [ref=e9]:
+      - generic [ref=e10]: 用户名
+      - textbox "用户名" [ref=e11]:
+        - /placeholder: 请输入用户名
+        - text: admin
+    - generic [ref=e12]:
+      - generic [ref=e13]: 密码
+      - textbox "密码" [active] [ref=e14]:
+        - /placeholder: 请输入密码
+    - button "登 录" [disabled] [ref=e15]
+  - generic [ref=e16]:
+    - img [ref=e17]
+    - generic [ref=e19]: 账号或密码错误，请重试
+    - button "关闭提示" [ref=e20] [cursor=pointer]: ×

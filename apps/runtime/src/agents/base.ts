@@ -86,6 +86,22 @@ export function coerceDone(done: unknown): boolean {
 
 
 /**
+ * 把会话主人的个人记忆拼成放在 systemPrompt 最前面的一段。
+ * 空 / 纯空白记忆返回空串（不加任何噪声）；否则带一个简短中文抬头，
+ * 让 LLM 知道这是用户长期背景、优先级最高。结尾留两个换行与角色提示词隔开。
+ */
+export function memorySection(userMemory: string): string {
+  const trimmed = userMemory.trim();
+  if (!trimmed) {
+    return "";
+  }
+  return (
+    "=== 用户长期记忆（最高优先级背景信息，贯穿所有回复）===\n" +
+    `${trimmed}\n\n`
+  );
+}
+
+/**
  * 会议结束「一次性整理」的结构化输出 schema：一次 LLM 调用同时产出
  * 会议纪要(minutes) + 每个角色的工作段(按 agent 名平铺)。
  *
@@ -241,10 +257,19 @@ export abstract class BaseAgent {
     requirement: string,
     conversationHistory: string,
     opts?: {
+      // 会话主人的个人记忆，拼到 systemPrompt 最前面（空串则不加）。
+      userMemory?: string;
       onDelta?: (text: string) => void;
       onToolUse?: (toolName: string) => void;
       // 每次工具执行完成后调一次，带上该次调用的 name/args/result（前端据此加按钮 + 展开结果）。
       onToolResult?: (rec: ToolCallRecord) => void;
+      // risk>low 的工具执行前调一次，返回用户是否同意。给了才启用 HITL 审批；
+      // 没给（如 CLI 路径）则不拦截、直接执行。
+      onToolApproval?: (info: {
+        toolName: string;
+        risk: string;
+        args: Record<string, unknown>;
+      }) => Promise<boolean>;
     },
   ): Promise<AgentResponse> {
     // 1) 清乱码：去掉 stdin 来的孤立 surrogate
@@ -255,7 +280,9 @@ export abstract class BaseAgent {
     this.RAGRetriever.restart();
 
     const userPrompt = cleanBadChars(this._userPrompt(requirement_cleaned, history_cleaned));
-    const systemPrompt = cleanBadChars(this.systemPrompt + this._routingPrompt());
+    // systemPrompt 由三段拼成（顺序固定）：用户记忆 + 角色提示词 + 路由提示词。
+    const memoryPrompt = memorySection(opts?.userMemory ?? "");
+    const systemPrompt = cleanBadChars(memoryPrompt + this.systemPrompt + this._routingPrompt());
 
     const Allmessages: BaseMessage[] = [
       new SystemMessage(systemPrompt),
@@ -299,14 +326,33 @@ export abstract class BaseAgent {
           }
           let toolResult: string;
           if (toolToRun) {
-            // 服务端路径:工具执行前通知前端显示 "UsingTools: <工具名>" 标签
-            opts?.onToolUse?.(toolName);
-            // 通过 config 把自己的 agent 名传给工具（rag_search 据此查对应私有表；web_search 忽略）
-            const out = await toolToRun.invoke(toolArgs, {
-              configurable: { agentName: this.name },
-            });
-            // 工具 invoke 可能返回 string 或 ToolMessage；统一收敛成字符串
-            toolResult = typeof out === "string" ? out : JSON.stringify(out);
+            // 工具的 risk 等级（自定义元数据，见各 *Tool.ts）；缺省视为 low。
+            // metadata 在具体工具实例上，但 StructuredToolInterface 没暴露它，按需窄化取一下。
+            const toolMeta = (toolToRun as { metadata?: Record<string, unknown> }).metadata;
+            const risk = (toolMeta?.risk as string | undefined) ?? "low";
+            // HITL 审批：risk 高于 low 且上层提供了 onToolApproval 时，执行前先等用户拍板。
+            let approved = true;
+            if (risk !== "low" && opts?.onToolApproval) {
+              approved = await opts.onToolApproval({
+                toolName,
+                risk,
+                args: toolArgs as Record<string, unknown>,
+              });
+            }
+            if (!approved) {
+              // 用户拒绝：跳过执行。仍要给这次 tool_call 一个结果（否则 OpenAI 协议
+              // 会因 tool_call_id 没有对应 ToolMessage 而报错），用一句占位说明代替。
+              toolResult = "(用户拒绝使用该工具)";
+            } else {
+              // 服务端路径:工具执行前通知前端显示 "UsingTools: <工具名>" 标签
+              opts?.onToolUse?.(toolName);
+              // 通过 config 把自己的 agent 名传给工具（rag_search 据此查对应私有表；web_search 忽略）
+              const out = await toolToRun.invoke(toolArgs, {
+                configurable: { agentName: this.name },
+              });
+              // 工具 invoke 可能返回 string 或 ToolMessage；统一收敛成字符串
+              toolResult = typeof out === "string" ? out : JSON.stringify(out);
+            }
           } else {
             toolResult = `(未知工具: ${toolName})`;
           }

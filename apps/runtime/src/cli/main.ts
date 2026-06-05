@@ -49,6 +49,8 @@ async function runExecution(
 ): Promise<AgentState> {
   const initialState: AgentState = {
     requirement: currentRequirement,
+    // CLI 无登录用户概念，个人记忆恒为空串（memorySection 据此不加内容）。
+    userMemory: "",
     // 带入历史轮的 messages，concat reducer 会在其上继续追加本轮发言，
     // 于是 agent 的 history 里能看到之前所有讨论，最终展示也是全量。
     messages: priorMessages,

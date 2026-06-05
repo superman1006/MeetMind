@@ -4,8 +4,10 @@ import { useChatStore, shouldShowTailThinking } from "../stores/chat.js";
 import type { StoredTurn } from "../stores/chat.js";
 import { useSessionsStore } from "../stores/sessions.js";
 import { rpc } from "../api/rpcClient.js";
+import { logUserAction } from "../api/logger.js";
 import MessageBubble from "./MessageBubble.vue";
 import Composer from "./Composer.vue";
+import ToolApprovalBar from "./ToolApprovalBar.vue";
 import MeetingEndDialog from "./MeetingEndDialog.vue";
 import ConfirmDialog from "./ConfirmDialog.vue";
 import TypingDots from "./TypingDots.vue";
@@ -27,10 +29,14 @@ const title = computed(() => {
   return "";
 });
 const scroller = ref<HTMLElement | null>(null);
+// Composer 子组件引用:切换/新建会话时主动聚焦其输入框,让用户直接打字。
+const composer = ref<InstanceType<typeof Composer> | null>(null);
 // 「会话已结束」提示弹窗开关
 const endedNotice = ref(false);
 // 会议结束整理弹窗状态:存在 chat store 里按会话区分(由全局 SSE 订阅的 summary_* 事件驱动)。
 const summary = computed(() => chat.summaryOf(props.sessionId));
+// 挂起的工具审批(risk>low 的工具执行前):有值则输入框上方弹审批条。
+const pendingApproval = computed(() => chat.pendingApprovalOf(props.sessionId));
 
 // 尾部「思考中」占位:只在「等下一个 agent 开口」的间隙显示(用户刚发完还没 turn_start、
 // 或上一个 agent 已结束还没轮到下一个)。一旦某个 agent 已 turn_start——无论它还在 Phase 1
@@ -56,9 +62,13 @@ async function loadHistory(sessionId: string): Promise<void> {
 // watch 是 Vue 3 的响应式 API：盯着某个会变的值props.sessionId，一变就执行你写的回调
 watch(
   () => props.sessionId,
-  (id) => {
+  async (id) => {
     chat.ensure(id);
     loadHistory(id);
+    // 切到(含新建)这条会话后聚焦输入框。nextTick 等 Composer 挂载/更新完再聚焦;
+    // 首次挂载由 Composer 自身 onMounted 兜底,这里覆盖「ChatWindow 不重挂、仅 sessionId 变」的情况。
+    await nextTick();
+    composer.value?.focus();
   },
   { immediate: true },
 );
@@ -76,7 +86,24 @@ watch(
 
 
 async function onSend(text: string): Promise<void> {
+  logUserAction("发送消息", { sessionId: props.sessionId, length: text.length });
+  // 是否本会话首条消息:addUser 前本地零气泡 = 新会话第一次发言(重开带历史的会话气泡非空)。
+  const isFirst = chat.bubblesOf(props.sessionId).length === 0;
   chat.addUser(props.sessionId, text);
+  // 首条消息:并行 fire 一个标题摘要请求(不 await、不阻塞下面的 chat.send,与架构师讨论并行),
+  // 后端用 LLM 把输入总结成短标题并写库,拿到后回填前端会话标题。失败/空标题静默忽略,保留默认标题。
+  if (isFirst) {
+    const sid = props.sessionId;  // 捕获当前会话 id:请求在途时用户可能已切走,回填要认准这条会话。
+    rpc<{ ok: boolean; title?: string }>("chat.summaryTitle", { sessionId: sid, requirement: text })
+      .then((res) => {
+        if (res.ok && res.title) {
+          sessions.setTitle(sid, res.title);
+        }
+      })
+      .catch(() => {
+        // 标题摘要失败不影响讨论,什么都不做。
+      });
+  }
   try {
     //调用 rpcClient 发送POST 请求 需要调用的方法是 chat.send
     await rpc("chat.send", { sessionId: props.sessionId, requirement: text });
@@ -87,6 +114,7 @@ async function onSend(text: string): Promise<void> {
 
 // 打断当前讨论:后端 abort 本轮 → 推 round_done(interrupted) → finishRound 清 busy → 可重新输入。
 async function onInterrupt(): Promise<void> {
+  logUserAction("打断讨论", { sessionId: props.sessionId });
   try {
     await rpc("chat.interrupt", { sessionId: props.sessionId });
   } catch (e) {
@@ -96,6 +124,7 @@ async function onInterrupt(): Promise<void> {
 
 // 结束会议:弹出整理中弹窗,调 chat.end;后续进度/结果由 SSE 的 summary_* 事件驱动弹窗更新。
 async function onEnd(): Promise<void> {
+  logUserAction("结束会议", { sessionId: props.sessionId });
   // 点结束即标记会话结束:此后该会话回车/点发送会被 Composer 拦截 → onBlocked 弹提示。
   chat.markEnded(props.sessionId);
   chat.openSummary(props.sessionId);
@@ -109,6 +138,21 @@ async function onEnd(): Promise<void> {
 // 已结束会话仍想发送:不真的发,弹「会话已结束」提示。
 function onBlocked(): void {
   endedNotice.value = true;
+}
+
+// 用户对工具审批拍板:先乐观清掉审批条,再把决策回传 runtime(method=toolApproval)。
+async function onApprovalDecide(approved: boolean): Promise<void> {
+  const p = pendingApproval.value;
+  if (!p) {
+    return;
+  }
+  logUserAction("工具审批", { sessionId: props.sessionId, tool: p.tool, risk: p.risk, approved });
+  chat.clearPendingApproval(props.sessionId);
+  try {
+    await rpc("toolApproval", { approvalId: p.approvalId, approved });
+  } catch (e) {
+    chat.addErrorBubble(props.sessionId, String(e));
+  }
 }
 </script>
 
@@ -126,7 +170,14 @@ function onBlocked(): void {
         </div>
       </div>
     </div>
+    <ToolApprovalBar
+      v-if="pendingApproval"
+      :tool="pendingApproval.tool"
+      :risk="pendingApproval.risk"
+      @decide="onApprovalDecide"
+    />
     <Composer
+      ref="composer"
       :busy="busy"
       :ended="ended"
       @send="onSend"

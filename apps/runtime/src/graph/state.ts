@@ -21,6 +21,12 @@ export const AgentStateAnnotation = Annotation.Root({
     // default 代表当前 requirement 没有值时的默认值,需要传入一个函数
     default: () => "",
   }),
+  // 会话主人的个人记忆；本轮开始时按 owner 加载一次，整轮保持不变，
+  // 各 agent 节点读出后拼到 systemPrompt 最前面。CLI 无登录用户，恒为空串。
+  userMemory: Annotation<string>({
+    reducer: (_existing, update) => update,
+    default: () => "",
+  }),
   // 仅追加的讨论历史；每条就是一次 agent.invoke() 的产物 AgentResponse
   messages: Annotation<AgentResponse[]>({
     // 把传入的消息传入 reducer，和现有的消息列表合并成一个新的列表。这里使用 concat 来实现追加。

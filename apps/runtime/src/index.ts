@@ -21,5 +21,6 @@ const { buildGraph } = await import("./graph/builder.js");
 const { startServer } = await import("./server/httpServer.js");
 
 await bootstrap();
-const graph = buildGraph();
-startServer(graph, 3002);
+// 用可变 holder 包住 graph:model.set 热切换模型时会 buildGraph() 重建并换掉 holder.current。
+const graphHolder = { current: buildGraph() };
+startServer(graphHolder, 3002);

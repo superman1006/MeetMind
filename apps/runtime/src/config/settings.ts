@@ -76,6 +76,11 @@ export type Settings = z.infer<typeof SettingsSchema>;
 
 let _cached: Settings | null = null;
 
+// 前端运行期下发的 LLM 模型覆盖（apiKey / baseUrl / modelName）。
+// 优先级高于 .env：setModelOverrides 写进来后清掉 _cached，下次 getSettings 重新 parse 并并入。
+// 进程内内存态，重启即失效（如需持久化可回写 .env，本期不做）。
+const _modelOverrides: { apiKey?: string; baseUrl?: string; modelName?: string } = {};
+
 /**
  * 单例配置访问器（首次 parse 后缓存复用）。
  */
@@ -114,8 +119,69 @@ export function getSettings(): Settings {
     }
   }
 
-  _cached = SettingsSchema.parse(filtered); // 校验并填默认，缓存为单例
+  const parsed = SettingsSchema.parse(filtered); // 校验并填默认
+
+  // 把前端动态下发的模型覆盖叠加到解析结果上（优先级高于 .env）
+  const merged: Settings = { ...parsed };
+  if (_modelOverrides.apiKey !== undefined) {
+    merged.apiKey = _modelOverrides.apiKey;
+  }
+  if (_modelOverrides.baseUrl !== undefined) {
+    merged.baseUrl = _modelOverrides.baseUrl;
+  }
+  if (_modelOverrides.modelName !== undefined) {
+    merged.modelName = _modelOverrides.modelName;
+  }
+
+  _cached = merged; // 缓存为单例
   return _cached;
+}
+
+/**
+ * 设置前端下发的 LLM 模型覆盖。只接受非空字符串的字段，其余保持原值。
+ * 写入后清空 _cached，使下次 getSettings() 重新合并出新配置。
+ * 注意：agent 只在构造阶段读 settings，调用方改完覆盖后需自行重建 graph 才会真正生效。
+ */
+export function setModelOverrides(overrides: {
+  apiKey?: string;
+  baseUrl?: string;
+  modelName?: string;
+}): void {
+  if (typeof overrides.apiKey === "string" && overrides.apiKey) {
+    _modelOverrides.apiKey = overrides.apiKey;
+  }
+  if (typeof overrides.baseUrl === "string" && overrides.baseUrl) {
+    _modelOverrides.baseUrl = overrides.baseUrl;
+  }
+  if (typeof overrides.modelName === "string" && overrides.modelName) {
+    _modelOverrides.modelName = overrides.modelName;
+  }
+  _cached = null;
+}
+
+/**
+ * 读取当前生效的 LLM 模型配置，供前端设置面板回填。
+ * apiKey 不明文返回：apiKeyMasked 仅保留尾 4 位，apiKeySet 表示是否已配置。
+ */
+export function getCurrentModelConfig(): {
+  baseUrl: string;
+  modelName: string;
+  apiKeyMasked: string;
+  apiKeySet: boolean;
+} {
+  const s = getSettings();
+  let masked = "";
+  if (s.apiKey.length > 0 && s.apiKey.length <= 4) {
+    masked = "****";
+  } else if (s.apiKey.length > 4) {
+    masked = "****" + s.apiKey.slice(-4);
+  }
+  return {
+    baseUrl: s.baseUrl,
+    modelName: s.modelName,
+    apiKeyMasked: masked,
+    apiKeySet: s.apiKey.length > 0,
+  };
 }
 
 /**

@@ -14,8 +14,10 @@ import {
   buildAgentsTables,
   countDocs,
   ensureChatTables,
+  ensureUserTable,
   getEmbedderModel,
   pingDb,
+  seedAdminUser,
 } from "./database/index.js";
 import { initMcpTools } from "./tools/mcp/mcpClient.js";
 import { pathExists, printSystem } from "./utils/utils.js";
@@ -56,6 +58,11 @@ export async function bootstrap(): Promise<void> {
   // ---------- 会话 / 消息表 ----------
   await ensureChatTables();
   printSystem(chalk.green("✓ 会话 / 消息表已就绪"));
+
+  // ---------- 用户表（登录鉴权）+ 种子 admin ----------
+  await ensureUserTable();
+  await seedAdminUser();
+  printSystem(chalk.green("✓ 用户表已就绪（种子用户 admin/admin）"));
 
   // ---------- 本地 Rerank ----------
   printSystem(

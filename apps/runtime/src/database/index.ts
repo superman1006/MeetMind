@@ -29,3 +29,6 @@ export * from "./retrieval/rag_retriever.js";
 
 // ---------- chat：会话 / 消息持久化 ----------
 export * from "./chat/chatStore.js";
+
+// ---------- users：用户表 / 登录鉴权 ----------
+export * from "./users/userStore.js";

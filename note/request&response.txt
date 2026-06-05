@@ -1,0 +1,16 @@
+
+
+
+前端按钮             发送请求      需要调用的方法            runtime 收到后执行的方法
+-----------------------------------------------------------------------------
+发送消息按钮           rpc           chat.send             handleRpc 中判断并执行
+打断按钮              rpc           chat.interrupt        handleRpc 中判断并执行
+结束会议按钮           rpc           chat.end              handleRpc 中判断并执行
+新会话按钮            rpc           session.create        handleRpc 中判断并执行
+点击会话(拉历史)       rpc           session.messages      handleRpc 中判断并执行
+重命名会话            rpc           session.rename        handleRpc 中判断并执行
+删除会话              rpc           session.delete        handleRpc 中判断并执行
+启动时拉会话列表       rpc           session.list          handleRpc 中判断并执行
+打开模型配置面板       rpc           model.get             handleRpc 中判断并执行
+保存模型配置          rpc           model.set             handleRpc 中判断并执行
+启动时订阅事件流       events        (GET /events)         addClient 登记长连,之后 sse.send 推

@@ -26,6 +26,7 @@ function makeHandlers(): SseHandlers {
     onDelta: vi.fn(),
     onUsingTools: vi.fn(),
     onToolResult: vi.fn(),
+    onToolApprovalRequest: vi.fn(),
     onTurnEnd: vi.fn(),
     onRoundDone: vi.fn(),
     onError: vi.fn(),

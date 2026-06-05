@@ -28,6 +28,17 @@ function pickLevel(n: number): { label: string; fn: (...a: unknown[]) => void } 
   return { label: "DEBUG", fn: console.log.bind(console) };
 }
 
+// 记录「用户主动操作」的一条语义日志:用户点了哪个按钮 / 做了什么动作。
+// 紧跟其后的请求日志(rpcClient 的「→ 发出请求」)就是这个动作触发的,两条对照即可还原「点击 → 请求」的因果。
+// action=动作的人话描述(如「发送消息」);detail=可选的上下文字段(sessionId / 标题 / 文本长度等)。
+export function logUserAction(action: string, detail?: Record<string, unknown>): void {
+  if (detail) {
+    logger.info({ action, ...detail }, `👤 用户操作: ${action}`);
+  } else {
+    logger.info({ action }, `👤 用户操作: ${action}`);
+  }
+}
+
 export const logger = pino({
   level: "info",
   browser: {

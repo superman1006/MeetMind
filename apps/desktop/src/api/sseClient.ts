@@ -12,6 +12,9 @@ export interface DeltaPayload { sessionId: string; turnId: string; text: string 
 export interface UsingToolsPayload { sessionId: string; turnId: string; tool: string }
 // tool_result:某次工具调用执行完成,带上这次调用的工具名 / 入参 / 返回结果(前端据此加按钮 + 展开结果)。
 export interface ToolResultPayload { sessionId: string; turnId: string; name: string; args: Record<string, unknown>; result: string }
+// tool_approval_request:某个 risk>low 的工具执行前,后端挂起等审批。前端据此在输入框上方弹审批框,
+// 用户点同意/拒绝后回 toolApproval RPC(带 approvalId)。
+export interface ToolApprovalRequestPayload { sessionId: string; turnId: string; approvalId: string; tool: string; risk: string; args: Record<string, unknown> }
 // turn_end:某个 Agent 发言结束。next_agent=接下来轮到谁,done=整轮是否到此为止。
 export interface TurnEndPayload { sessionId: string; turnId: string; next_agent: string | null; done: boolean; used_rag: boolean }
 // round_done:一整轮讨论彻底结束。
@@ -29,6 +32,7 @@ export interface SseHandlers {
   onDelta: (p: DeltaPayload) => void;
   onUsingTools: (p: UsingToolsPayload) => void;
   onToolResult: (p: ToolResultPayload) => void;
+  onToolApprovalRequest: (p: ToolApprovalRequestPayload) => void;
   onTurnEnd: (p: TurnEndPayload) => void;
   onRoundDone: (p: RoundDonePayload) => void;
   onError: (p: ErrorPayload) => void;
@@ -67,6 +71,9 @@ export function openEvents(handlers: SseHandlers): EventSource {
   });
   es.addEventListener("tool_result", (e) => {
     handlers.onToolResult(JSON.parse((e as MessageEvent).data));
+  });
+  es.addEventListener("tool_approval_request", (e) => {
+    handlers.onToolApprovalRequest(JSON.parse((e as MessageEvent).data));
   });
   es.addEventListener("turn_end", (e) => {
     handlers.onTurnEnd(JSON.parse((e as MessageEvent).data));
