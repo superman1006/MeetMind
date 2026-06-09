@@ -24,6 +24,7 @@ import { webFetchTool } from "./webFetchTool.js";
 import { grepTool } from "./grepTool.js";
 import { globTool } from "./globTool.js";
 import { writeFileTool } from "./writeFileTool.js";
+import { skillTool } from "./skillTool.js";
 
 /** 工具登记表：register(tool) 往 allTools 数组里 push。 */
 export class ToolRegister {
@@ -46,6 +47,7 @@ toolRegister.register(webFetchTool);
 toolRegister.register(grepTool);
 toolRegister.register(globTool);
 toolRegister.register(writeFileTool);
+toolRegister.register(skillTool);
 
 // 与 toolRegister.allTools 同引用；MCP 工具稍后由 initMcpTools() 追加进这同一个数组。
 export const allTools = toolRegister.allTools;
