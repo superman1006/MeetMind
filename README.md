@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/banner.png" alt="MeetMind" width="560"/>
+<img src="assets/banner.png" alt="MeetMind"/>
 
 ### 多 Agent RAG 协作系统 · Multi-Agent RAG Collaboration
 
