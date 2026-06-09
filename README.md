@@ -12,14 +12,13 @@
 [![pgvector](https://img.shields.io/badge/pgvector-008BB9?style=flat-square)](https://github.com/pgvector/pgvector)
 [![Transformers.js](https://img.shields.io/badge/Transformers.js-FFD21E?style=flat-square&logo=huggingface&logoColor=black)](https://huggingface.co/docs/transformers.js)
 
-[![Quick Start](https://img.shields.io/badge/🚀_Quick_Start-00C853?style=for-the-badge&logoColor=white)](#快速开始)
-[![License MIT](https://img.shields.io/badge/License-MIT-555555?style=for-the-badge)](LICENSE)
-<br/>
-[![Claude Code](https://img.shields.io/badge/Claude_Code-D97757?style=for-the-badge&logo=anthropic&logoColor=white)](https://claude.com/claude-code)
-[![Codex](https://img.shields.io/badge/Codex-000000?style=for-the-badge&logo=openai&logoColor=white)](https://openai.com/codex/)
-[![Gemini CLI](https://img.shields.io/badge/Gemini_CLI-4285F4?style=for-the-badge&logo=googlegemini&logoColor=white)](https://github.com/google-gemini/gemini-cli)
-[![Cursor](https://img.shields.io/badge/Cursor-000000?style=for-the-badge&logo=cursor&logoColor=white)](https://cursor.com/)
-[![Trae](https://img.shields.io/badge/Trae-FF3B30?style=for-the-badge&logoColor=white)](https://trae.ai/)
+[![Quick Start](https://img.shields.io/badge/Quick_Start-00C853?style=flat-square&logo=rocket&logoColor=white)](#快速开始)
+[![License MIT](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](LICENSE)
+[![Claude Code](https://img.shields.io/badge/Claude_Code-D97757?style=flat-square&logo=anthropic&logoColor=white)](https://claude.com/claude-code)
+[![Codex](https://img.shields.io/badge/Codex-000000?style=flat-square&logo=openai&logoColor=white)](https://openai.com/codex/)
+[![Gemini CLI](https://img.shields.io/badge/Gemini_CLI-4285F4?style=flat-square&logo=googlegemini&logoColor=white)](https://github.com/google-gemini/gemini-cli)
+[![Cursor](https://img.shields.io/badge/Cursor-000000?style=flat-square&logo=cursor&logoColor=white)](https://cursor.com/)
+[![Trae](https://img.shields.io/badge/Trae-FF3B30?style=flat-square)](https://trae.ai/)
 
 > 本项目可配合 **Claude Code / Codex / Gemini CLI / Cursor / Trae** 等 AI 编程助手进行二次开发与协作。
 
