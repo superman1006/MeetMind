@@ -91,6 +91,8 @@ interface ChatState {
   summaryBySession: Record<string, SummaryState>;
   // 各会话挂起的工具审批;有值时输入框上方弹审批条,用户拍板后清除。
   pendingApprovalBySession: Record<string, PendingApproval | null>;
+  // 各会话是否有崩溃残留的未完成轮可恢复（探测得到后置位；点「继续」/落定后清）。
+  resumableBySession: Record<string, boolean>;
 }
 
 export const useChatStore = defineStore("chat", {
@@ -100,6 +102,7 @@ export const useChatStore = defineStore("chat", {
     endedBySession: {},
     summaryBySession: {},
     pendingApprovalBySession: {},
+    resumableBySession: {},
   }),
   getters: {
     bubblesOf: (state) => (sessionId: string) => state.bubblesBySession[sessionId] ?? [],
@@ -107,6 +110,7 @@ export const useChatStore = defineStore("chat", {
     isEnded: (state) => (sessionId: string) => state.endedBySession[sessionId] ?? false,
     summaryOf: (state) => (sessionId: string) => state.summaryBySession[sessionId] ?? CLOSED_SUMMARY,
     pendingApprovalOf: (state) => (sessionId: string) => state.pendingApprovalBySession[sessionId] ?? null,
+    isResumable: (state) => (sessionId: string) => state.resumableBySession[sessionId] ?? false,
   },
   actions: {
     ensure(sessionId: string): void {
@@ -131,6 +135,8 @@ export const useChatStore = defineStore("chat", {
         turnEnded: true,  // 用户泡不参与流式,天然落定
       });
       this.busyBySession[sessionId] = true;
+      // 发了新消息 = 放弃上一轮崩溃残留：清掉可恢复标记，免得新一轮跑完后续跑提示条残留。
+      this.resumableBySession[sessionId] = false;
     },
     startTurn(sessionId: string, turnId: string, agentName: string, role: string): void {
       this.ensure(sessionId);
@@ -200,6 +206,61 @@ export const useChatStore = defineStore("chat", {
     clearPendingApproval(sessionId: string): void {
       this.pendingApprovalBySession[sessionId] = null;
     },
+    /** 探测到可恢复轮：把崩溃前已产出的发言作为已落定气泡追加，并置 resumable。 */
+    setResumable(sessionId: string, turns: StoredTurn[]): void {
+      this.ensure(sessionId);
+      const bubbles = this.bubblesBySession[sessionId];
+      const base = bubbles.length;
+      for (let i = 0; i < turns.length; i++) {
+        const t = turns[i];
+        let createdAt = Date.now();
+        if (t.created_at) {
+          const parsed = new Date(t.created_at).getTime();
+          if (!Number.isNaN(parsed)) {
+            createdAt = parsed;
+          }
+        }
+        bubbles.push({
+          turnId: `resume-${base + i}`,
+          agent_name: t.agent_name,
+          role: t.role,
+          text: t.message,
+          isUser: t.agent_name === "user",
+          done: t.done,
+          used_rag: t.used_rag,
+          tool: t.tool ?? "",
+          toolCalls: t.tool_calls ?? [],
+          createdAt,
+          turnEnded: true,
+        });
+      }
+      this.resumableBySession[sessionId] = true;
+    },
+    /** 清除某会话的 resumable 标记（提示条消失）。 */
+    clearResumable(sessionId: string): void {
+      this.resumableBySession[sessionId] = false;
+    },
+    /** 点「放弃」：丢弃崩溃残留轮——删掉 setResumable 追加的 resume-* 气泡（这些发言从未落库），清 resumable。 */
+    discardResumable(sessionId: string): void {
+      const bubbles = this.bubblesBySession[sessionId];
+      if (bubbles) {
+        // 末尾连续的 resume-* 气泡是崩溃前未落库的发言，放弃即整段移除，会话回到 DB 历史的样子。
+        while (bubbles.length > 0) {
+          const last = bubbles[bubbles.length - 1];
+          if (last.turnId.startsWith("resume-")) {
+            bubbles.pop();
+          } else {
+            break;
+          }
+        }
+      }
+      this.resumableBySession[sessionId] = false;
+    },
+    /** 点「继续」：置 busy 并清 resumable，随后由 SSE 流式补完本轮。 */
+    beginResume(sessionId: string): void {
+      this.busyBySession[sessionId] = true;
+      this.resumableBySession[sessionId] = false;
+    },
     finishRound(sessionId: string): void {
       this.busyBySession[sessionId] = false;
       // 本轮结束/打断:清掉可能残留的挂起审批,审批条不该跨轮存在。
@@ -248,6 +309,9 @@ export const useChatStore = defineStore("chat", {
         });
       }
       this.bubblesBySession[sessionId] = bubbles;
+      // 重新加载历史 = 重置该会话展示态：清掉可恢复标记，随后 checkResumable 再按后端真值重新置位，
+      // 避免「上次看到过续跑提示、这次后端已无可恢复」时提示条残留。
+      this.resumableBySession[sessionId] = false;
     },
     /** 标记某会话已结束(点「结束」后);之后该会话的发送/结束会被拦截。后端会持久化,启动时由 hydrateEnded 回灌。 */
     markEnded(sessionId: string): void {
@@ -302,6 +366,7 @@ export const useChatStore = defineStore("chat", {
       delete this.endedBySession[sessionId];
       delete this.summaryBySession[sessionId];
       delete this.pendingApprovalBySession[sessionId];
+      delete this.resumableBySession[sessionId];
     },
     addErrorBubble(sessionId: string, message: string): void {
       this.ensure(sessionId);

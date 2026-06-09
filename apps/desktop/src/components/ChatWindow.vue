@@ -37,6 +37,8 @@ const endedNotice = ref(false);
 const summary = computed(() => chat.summaryOf(props.sessionId));
 // 挂起的工具审批(risk>low 的工具执行前):有值则输入框上方弹审批条。
 const pendingApproval = computed(() => chat.pendingApprovalOf(props.sessionId));
+// 是否有崩溃残留的未完成轮可恢复（探测后由 chat store 置位）。
+const resumable = computed(() => chat.isResumable(props.sessionId));
 
 // 尾部「思考中」占位:只在「等下一个 agent 开口」的间隙显示(用户刚发完还没 turn_start、
 // 或上一个 agent 已结束还没轮到下一个)。一旦某个 agent 已 turn_start——无论它还在 Phase 1
@@ -59,14 +61,39 @@ async function loadHistory(sessionId: string): Promise<void> {
   }
 }
 
+// 打开会话时探测是否有可恢复的未完成轮；有则把崩溃前发言渲染出来并弹「继续」。
+async function checkResumable(sessionId: string): Promise<void> {
+  if (!sessionId || chat.isBusy(sessionId) || chat.isEnded(sessionId)) {
+    return;
+  }
+  try {
+    const res = await rpc<{ resumable: boolean; pendingTurns?: StoredTurn[] }>(
+      "chat.getResumable",
+      { sessionId },
+    );
+    if (res.resumable && res.pendingTurns && res.pendingTurns.length > 0) {
+      chat.setResumable(sessionId, res.pendingTurns);
+    }
+  } catch {
+    // 探测失败静默忽略，不影响正常使用。
+  }
+}
+
 // watch 是 Vue 3 的响应式 API：盯着某个会变的值props.sessionId，一变就执行你写的回调
 watch(
   () => props.sessionId,
   async (id) => {
     chat.ensure(id);
-    loadHistory(id);
-    // 切到(含新建)这条会话后聚焦输入框。nextTick 等 Composer 挂载/更新完再聚焦;
-    // 首次挂载由 Composer 自身 onMounted 兜底,这里覆盖「ChatWindow 不重挂、仅 sessionId 变」的情况。
+    // 先 load（会整体替换气泡），再探测续跑（在其后追加崩溃前发言），顺序不能反。
+    await loadHistory(id);
+    // 每个 await 后校验会话没被切走：快速切换时晚到的 checkResumable 不能把 stale 数据写进别的会话。
+    if (props.sessionId !== id) {
+      return;
+    }
+    await checkResumable(id);
+    if (props.sessionId !== id) {
+      return;
+    }
     await nextTick();
     composer.value?.focus();
   },
@@ -122,6 +149,34 @@ async function onInterrupt(): Promise<void> {
   }
 }
 
+// 点「继续」：从崩溃残留的 checkpoint 续跑未完成轮（发言经既有 SSE 流式进来）。
+async function onResume(): Promise<void> {
+  logUserAction("继续未完成轮次", { sessionId: props.sessionId });
+  // beginResume 同步置 busy 并清 resumable：提示条立刻消失、输入框切到「打断」。
+  chat.beginResume(props.sessionId);
+  try {
+    await rpc("chat.resume", { sessionId: props.sessionId });
+  } catch (e) {
+    // 恢复请求本身失败：addErrorBubble 会清 busy；resumable 已被 beginResume 清掉、不再弹提示，
+    // 会话回到「可正常发新消息」的状态（不重置 resumable 是有意的）。
+    chat.addErrorBubble(props.sessionId, String(e));
+  }
+}
+
+// 点「放弃」：丢弃崩溃残留的未完成轮——前端删掉未落库的 resume 气泡 + 清提示条，
+// 后端清掉在途 thread 标记 + 删 checkpoint（之后重开本会话不再弹「继续」提示）。
+async function onDiscard(): Promise<void> {
+  logUserAction("放弃未完成轮次", { sessionId: props.sessionId });
+  // 先同步清前端态：提示条消失、resume 气泡移除、输入框解锁。
+  chat.discardResumable(props.sessionId);
+  try {
+    await rpc("chat.discardResumable", { sessionId: props.sessionId });
+  } catch (e) {
+    // 后端清理失败也不回滚前端：本会话本次已可正常发新消息；只是下次重开可能再探到残留。
+    chat.addErrorBubble(props.sessionId, String(e));
+  }
+}
+
 // 结束会议:弹出整理中弹窗,调 chat.end;后续进度/结果由 SSE 的 summary_* 事件驱动弹窗更新。
 async function onEnd(): Promise<void> {
   logUserAction("结束会议", { sessionId: props.sessionId });
@@ -170,6 +225,13 @@ async function onApprovalDecide(approved: boolean): Promise<void> {
         </div>
       </div>
     </div>
+    <div v-if="resumable && !busy && !ended" class="resume-bar" role="status" aria-live="polite">
+      <span class="resume-text">上一轮讨论未完成（可能因服务重启中断），请选择继续或放弃后再输入。</span>
+      <div class="resume-actions">
+        <button class="resume-btn discard" @click="onDiscard">放弃</button>
+        <button class="resume-btn" @click="onResume">继续</button>
+      </div>
+    </div>
     <ToolApprovalBar
       v-if="pendingApproval"
       :tool="pendingApproval.tool"
@@ -180,6 +242,7 @@ async function onApprovalDecide(approved: boolean): Promise<void> {
       ref="composer"
       :busy="busy"
       :ended="ended"
+      :locked="resumable && !busy && !ended"
       @send="onSend"
       @interrupt="onInterrupt"
       @end="onEnd"
@@ -214,4 +277,11 @@ async function onApprovalDecide(approved: boolean): Promise<void> {
 .row { display: flex; margin: 8px 0; }
 .thinking-bubble { display: inline-flex; align-items: center; gap: 8px; max-width: 72%; padding: 10px 12px; border-radius: 12px; background: var(--bg-elevated); color: var(--text-dim); }
 .thinking-label { font-size: 12px; }
+.resume-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 16px; background: var(--accent-soft); border-top: 1px solid var(--border); }
+.resume-text { font-size: 13px; color: var(--text-main); }
+.resume-actions { flex-shrink: 0; display: flex; gap: 8px; }
+.resume-btn { flex-shrink: 0; padding: 6px 14px; border: none; border-radius: 8px; background: var(--accent); color: #fff; font-size: 13px; cursor: pointer; }
+.resume-btn:hover { opacity: 0.9; }
+/* 放弃:灰底次要按钮,和「继续」区分 */
+.resume-btn.discard { background: #6b7280; }
 </style>

@@ -13,12 +13,43 @@ import type { AgentResponse } from "../agents/base.js";
  * 整张图共享的状态。`messages` 走追加 reducer，其他字段直接覆盖。
  */
 export const AgentStateAnnotation = Annotation.Root({
-  // 架构师本轮输入的原始需求；整轮讨论中保持不变
+  // 架构师本轮输入的原始需求；整轮讨论中保持不变。
+  // 这是用户「原话」，只读：展示 / 落库 / 改写失败时的兜底都用它，预处理节点绝不覆盖它。
   requirement: Annotation<string>({
     // reducer 是一个合并函数。
     // _existing是代表当前 requirement 的旧值，update 是新值；这里直接的操作是直接使用新值覆盖旧值
     reducer: (_existing, update) => update,
     // default 代表当前 requirement 没有值时的默认值,需要传入一个函数
+    default: () => "",
+  }),
+  // rewrite_node 产出：把 requirement 做「指代消解 / 上下文改写」后的独立句。
+  // 各 agent 节点读这个（而非原始 requirement）去理解 + 生成；为空时下游兜底回 requirement。
+  rewritten_query: Annotation<string>({
+    reducer: (_existing, update) => update,
+    default: () => "",
+  }),
+  // rewrite_node 产出：为提升检索召回补充的同义/相关关键词（空格分隔）。
+  // 只用于检索层：createNode 经 config 传给 rag_search 拼到 query 后面，不进 agent 的阅读 prompt。
+  expansion_terms: Annotation<string>({
+    reducer: (_existing, update) => update,
+    default: () => "",
+  }),
+  // intent_node 产出：本轮用户输入的意图分类标签（见 INTENT_LABELS）。
+  // 经 opts 透传进 _userPrompt 当一句参考提示；分类失败时为空串（下游当作无信号）。
+  intent: Annotation<string>({
+    reducer: (_existing, update) => update,
+    default: () => "",
+  }),
+  // intent_node 产出：命中标签的 NLI 置信分（0~1）。route_node 据它 + 阈值决定要不要分流到右侧助手。
+  // 分类失败为 0；阈值兜底会让 0 分自然落回架构师全团队。
+  intent_score: Annotation<number>({
+    reducer: (_existing, update) => update,
+    default: () => 0,
+  }),
+  // route_node 产出：本轮分流决策。"chat" → 右侧回答助手单节点；其余（含空串）→ 架构师全团队。
+  // 仅供 route_node 之后那条条件边读取分派，不进 LLM。
+  route: Annotation<string>({
+    reducer: (_existing, update) => update,
     default: () => "",
   }),
   // 会话主人的个人记忆；本轮开始时按 owner 加载一次，整轮保持不变，

@@ -36,7 +36,16 @@ export const ragSearchTool = tool(
       (config?.configurable?.agentName as string | undefined) ?? ARCHITECT;
     const retriever = getRetriever(agentName);
 
-    const docs = await retriever.retrieve(query);
+    // rewrite_node 产出的检索扩展词（同义 / 相关关键词）：有则拼到 LLM 给的 query 后面，
+    // 让关键字召回 + 向量召回都拿到更丰富的 query 以提升召回；为空则按原 query 检索。
+    const expansionTerms =
+      (config?.configurable?.expansionTerms as string | undefined) ?? "";
+    let effectiveQuery = query;
+    if (expansionTerms.trim()) {
+      effectiveQuery = `${query} ${expansionTerms.trim()}`;
+    }
+
+    const docs = await retriever.retrieve(effectiveQuery);
     if (docs.length === 0) {
       return "(知识库中未找到相关条目)";
     }

@@ -17,7 +17,7 @@ const ui = useUiStore();
 const chat = useChatStore();
 const auth = useAuthStore();
 
-// 会话按 created_at 新旧分到 5 个时间段(1 小时 / 1 天 / 3 天 / 30 天之前 + 更早),空段不显示。
+// 会话按 created_at 新旧分到 5 个时间段(今天 / 昨天 / 7 天内 / 30 天内 / 更早),空段不显示。
 // 每次列表变化都重新分桶并取一次「现在」;段内顺序沿用服务端的 created_at DESC。
 const sessionGroups = computed(() => groupSessionsByTime(sessions.list, Date.now()));
 
@@ -313,9 +313,13 @@ async function confirmDelete(): Promise<void> {
 .new:hover { transform: translateY(-2px); box-shadow: var(--shadow-lift); filter: brightness(1.05); }
 .new:active { transform: translateY(0); box-shadow: var(--shadow-card); }
 .list { list-style: none; margin: 0; padding: 2px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 8px; }
-/* 时间段小标题:不可点、不当卡片,只做分隔。首个标题去掉上间距,避免顶部空一截。 */
-.group-head { font-size: 11px; font-weight: 600; color: var(--text-dim); text-transform: none; letter-spacing: 0.02em; padding: 4px 8px 0; margin-top: 6px; cursor: default; user-select: none; }
-.group-head:first-child { margin-top: 0; }
+/* 时间段小标题:一行左靠边的灰色小字,不是卡片。
+   ⚠️ 必须用 .list li.group-head(0,2,1)压过下面的 .list li(0,1,1),否则会被卡片的底色/边框/阴影覆盖。
+   首个标题去掉上间距,避免顶部空一截。 */
+.list li.group-head { display: block; font-size: 12px; font-weight: 600; color: var(--text-dim); text-transform: none; letter-spacing: 0.02em; padding: 8px 4px 2px; margin-top: 4px; border-radius: 0; background: transparent; border: none; box-shadow: none; cursor: default; user-select: none; }
+.list li.group-head:first-child { margin-top: 0; }
+/* 标题不是可点卡片,悬停不做上浮 / 高亮(覆盖 .list li:hover)。 */
+.list li.group-head:hover { background: transparent; transform: none; box-shadow: none; }
 /* 会话项做成卡片:亮于侧栏底色 + 细边 + 浅阴影,与背景拉开层次 */
 .list li { display: flex; align-items: center; gap: 6px; padding: 10px; border-radius: 10px; cursor: pointer; font-size: 14px; background: var(--bg-card); border: 1px solid var(--border); box-shadow: var(--shadow-card); transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease, border-color 0.15s ease; }
 .list li:hover { background: var(--bg-card-hover); transform: translateY(-2px); box-shadow: var(--shadow-lift); }

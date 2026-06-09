@@ -37,10 +37,12 @@ function messagesTable(): string {
 
 /** 建好 sessions / messages 两张表（幂等）。bootstrap 里调一次。 */
 export async function ensureChatTables(): Promise<void> {
+  // 获取数据库连接池
   const pool = getPgPool();
   const sessions = sessionsTable();
   const messages = messagesTable();
 
+  // 创建 sessions 表
   const createSessionsSql =
     `CREATE TABLE IF NOT EXISTS ${sessions} (` +
     `  id TEXT PRIMARY KEY,` +
@@ -49,22 +51,27 @@ export async function ensureChatTables(): Promise<void> {
     `  ended BOOLEAN NOT NULL DEFAULT false,` +
     `  owner TEXT NOT NULL` +
     `)`;
+  // 执行创建 sessions 表的 SQL 语句
   await pool.query(createSessionsSql);
 
-  // 兼容旧表:ended 列可能不存在,补上(幂等)
+  // 添加 ended 列
   await pool.query(`ALTER TABLE ${sessions} ADD COLUMN IF NOT EXISTS ended BOOLEAN NOT NULL DEFAULT false`);
 
-  // 兼容旧表:owner 列(会话归属用户名)可能不存在。先带 DEFAULT 'admin' 补列——把历史无主会话回填给种子用户 admin;
-  // 再 DROP DEFAULT,使此后新建会话必须显式带 owner(漏传直接报错,而不是静默落到 admin)。新库这两步是 no-op。
+  // 添加 owner 列
   await pool.query(`ALTER TABLE ${sessions} ADD COLUMN IF NOT EXISTS owner TEXT NOT NULL DEFAULT 'admin'`);
   await pool.query(`ALTER TABLE ${sessions} ALTER COLUMN owner DROP DEFAULT`);
+
+  // 断点续跑：本会话当前在途轮次的 LangGraph thread_id（非空=有未收尾的轮，可恢复）。
+  await pool.query(`ALTER TABLE ${sessions} ADD COLUMN IF NOT EXISTS pending_thread_id TEXT`);
 
   // 列表按 owner 过滤,给 owner 建索引
   const ownerIndexSql =
     `CREATE INDEX IF NOT EXISTS ${sessions}_owner_idx ` +
     `ON ${sessions} (owner)`;
+  // 执行添加 owner 索引的 SQL 语句
   await pool.query(ownerIndexSql);
 
+  
   const createMessagesSql =
     `CREATE TABLE IF NOT EXISTS ${messages} (` +
     `  id BIGSERIAL PRIMARY KEY,` +
@@ -80,17 +87,19 @@ export async function ensureChatTables(): Promise<void> {
     `  tool_calls JSONB NOT NULL DEFAULT '[]',` +
     `  created_at TIMESTAMPTZ NOT NULL DEFAULT now()` +
     `)`;
+  // 执行创建 messages 表的 SQL 语句
   await pool.query(createMessagesSql);
 
-  // 兼容旧表:tool 列可能不存在,补上(幂等)
+  // 添加 tool 列
   await pool.query(`ALTER TABLE ${messages} ADD COLUMN IF NOT EXISTS tool TEXT NOT NULL DEFAULT ''`);
-  // 兼容旧表:tool_calls 列(每次工具调用的 name/args/result 明细)可能不存在,补上(幂等)
+  // 添加 tool_calls 列
   await pool.query(`ALTER TABLE ${messages} ADD COLUMN IF NOT EXISTS tool_calls JSONB NOT NULL DEFAULT '[]'`);
 
-  // 按会话取历史时按 (session_id, seq) 排序，建个联合索引
+  // 创建 (session_id, seq) 联合索引
   const indexSql =
     `CREATE INDEX IF NOT EXISTS ${messages}_session_seq_idx ` +
     `ON ${messages} (session_id, seq)`;
+  // 执行创建联合索引的 SQL 语句
   await pool.query(indexSql);
 }
 
@@ -98,9 +107,11 @@ export async function ensureChatTables(): Promise<void> {
 export async function createSession(title: string, owner: string): Promise<SessionMeta> {
   const pool = getPgPool();
   const id = randomUUID();
+  // 插入会话元信息
   const insertSql =
     `INSERT INTO ${sessionsTable()} (id, title, owner) VALUES ($1, $2, $3) ` +
     `RETURNING id, title, created_at`;
+  // 执行插入会话元信息的 SQL 语句
   const result = await pool.query(insertSql, [id, title, owner]);
   const row = result.rows[0];
   // 新建会话必然未结束,ended 直接 false(DB 默认值也是 false)。
@@ -113,9 +124,11 @@ export async function listSessions(owner: string): Promise<SessionMeta[]> {
   const selectSql =
     `SELECT id, title, created_at, ended FROM ${sessionsTable()} ` +
     `WHERE owner = $1 ORDER BY created_at DESC`;
+  // 执行查询会话元信息的 SQL 语句
   const result = await pool.query(selectSql, [owner]);
   const metas: SessionMeta[] = [];
   for (const row of result.rows) {
+    // 将 ended 转换为 boolean 类型
     metas.push({ id: row.id, title: row.title, created_at: String(row.created_at), ended: row.ended === true });
   }
   return metas;
@@ -125,6 +138,7 @@ export async function listSessions(owner: string): Promise<SessionMeta[]> {
 export async function getSessionOwner(sessionId: string): Promise<string> {
   const pool = getPgPool();
   const selectSql = `SELECT owner FROM ${sessionsTable()} WHERE id = $1`;
+  // 执行查询会话归属用户名的 SQL 语句
   const result = await pool.query(selectSql, [sessionId]);
   if (result.rows.length === 0) {
     return "";
@@ -138,10 +152,11 @@ export async function getMessages(sessionId: string): Promise<AgentResponse[]> {
   const selectSql =
     `SELECT agent_name, role, message, next_agent, done, used_rag, tool, tool_calls, created_at ` +
     `FROM ${messagesTable()} WHERE session_id = $1 ORDER BY seq ASC`;
+  // 执行查询消息的 SQL 语句
   const result = await pool.query(selectSql, [sessionId]);
   const turns: AgentResponse[] = [];
   for (const row of result.rows) {
-    // tool_calls 列是 jsonb，pg 驱动已自动 parse 成数组；旧行/空值兜底为空数组
+    // 将tool_calls 列是 jsonb，pg 驱动已自动 parse 成数组；旧行/空值兜底为空数组
     const toolCalls = Array.isArray(row.tool_calls) ? row.tool_calls : [];
     turns.push({
       agent_name: row.agent_name,
@@ -179,8 +194,9 @@ export async function appendMessages(
     `(session_id, seq, agent_name, role, message, next_agent, done, used_rag, tool, tool_calls) ` +
     `VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`;
   for (const turn of turns) {
-    // tool_calls 走 jsonb，参数传 JSON 字符串(pg 会按列类型转成 jsonb)；缺省为空数组
+    // 将 tool_calls 列是 jsonb，pg 驱动已自动 parse 成数组；旧行/空值兜底为空数组
     const toolCallsJson = JSON.stringify(turn.tool_calls ?? []);
+    // 执行插入消息的 SQL 语句
     await pool.query(insertSql, [
       sessionId,
       nextSeq,
@@ -201,6 +217,7 @@ export async function appendMessages(
 export async function renameSession(sessionId: string, title: string): Promise<void> {
   const pool = getPgPool();
   const updateSql = `UPDATE ${sessionsTable()} SET title = $2 WHERE id = $1`;
+  // 执行重命名会话的 SQL 语句
   await pool.query(updateSql, [sessionId, title]);
 }
 
@@ -208,6 +225,7 @@ export async function renameSession(sessionId: string, title: string): Promise<v
 export async function markSessionEnded(sessionId: string): Promise<void> {
   const pool = getPgPool();
   const updateSql = `UPDATE ${sessionsTable()} SET ended = true WHERE id = $1`;
+  // 执行标记会话为已结束的 SQL 语句
   await pool.query(updateSql, [sessionId]);
 }
 
@@ -215,6 +233,7 @@ export async function markSessionEnded(sessionId: string): Promise<void> {
 export async function isSessionEnded(sessionId: string): Promise<boolean> {
   const pool = getPgPool();
   const selectSql = `SELECT ended FROM ${sessionsTable()} WHERE id = $1`;
+  // 执行查询会话是否已结束的 SQL 语句
   const result = await pool.query(selectSql, [sessionId]);
   const row = result.rows[0];
   if (!row) {
@@ -227,5 +246,32 @@ export async function isSessionEnded(sessionId: string): Promise<boolean> {
 export async function deleteSession(sessionId: string): Promise<void> {
   const pool = getPgPool();
   const deleteSql = `DELETE FROM ${sessionsTable()} WHERE id = $1`;
+  // 执行删除会话的 SQL 语句
   await pool.query(deleteSql, [sessionId]);
+}
+
+/** 记下本会话当前在途轮次的 thread_id（轮开始时写）。 */
+export async function setPendingThread(sessionId: string, threadId: string): Promise<void> {
+  const pool = getPgPool();
+  const updateSql = `UPDATE ${sessionsTable()} SET pending_thread_id = $2 WHERE id = $1`;
+  await pool.query(updateSql, [sessionId, threadId]);
+}
+
+/** 清除本会话的在途标记（正常完成 / 用户停止时调）。 */
+export async function clearPendingThread(sessionId: string): Promise<void> {
+  const pool = getPgPool();
+  const updateSql = `UPDATE ${sessionsTable()} SET pending_thread_id = NULL WHERE id = $1`;
+  await pool.query(updateSql, [sessionId]);
+}
+
+/** 取本会话在途轮次的 thread_id；无 / 为 NULL 时回 null。 */
+export async function getPendingThread(sessionId: string): Promise<string | null> {
+  const pool = getPgPool();
+  const selectSql = `SELECT pending_thread_id FROM ${sessionsTable()} WHERE id = $1`;
+  const result = await pool.query(selectSql, [sessionId]);
+  const row = result.rows[0];
+  if (!row || !row.pending_thread_id) {
+    return null;
+  }
+  return row.pending_thread_id;
 }

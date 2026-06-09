@@ -2,7 +2,9 @@
 // 上游是 httpServer 读出请求体后交到这里;看请求里的 method 是哪个功能,就转给对应逻辑处理。
 import { ChatOpenAI } from "@langchain/openai";
 import { buildGraph } from "../graph/builder.js";
-import { runExecution } from "./runExecution.js";
+import { runExecution, resumeExecution } from "./runExecution.js";
+import { deleteThreadCheckpoints } from "../graph/checkpointer.js";
+import type { AgentState } from "../graph/state.js";
 import * as sessions from "./sessions.js";
 import * as toolApprovals from "./toolApprovals.js";
 import * as chatStore from "../database/chat/chatStore.js";
@@ -151,6 +153,93 @@ export async function handleRpc(graph: GraphHolder, body: RpcRequest) {
     if (controller) {
       controller.abort();
     }
+    return rpcOk(id, { ok: true });
+  }
+
+  // chat.getResumable:探测本会话是否有崩溃残留的未完成轮可恢复。
+  if (body.method === "chat.getResumable") {
+    const sessionId = params.sessionId;
+    if (typeof sessionId !== "string" || !sessionId) {
+      return rpcError(id, -32602, "缺少 sessionId");
+    }
+    // 正在跑就不提示恢复。
+    if (sessions.isBusy(sessionId)) {
+      return rpcOk(id, { resumable: false });
+    }
+    const threadId = await chatStore.getPendingThread(sessionId);
+    if (!threadId) {
+      return rpcOk(id, { resumable: false });
+    }
+    // 取 checkpoint 当前状态里「超出 DB」的发言，供前端先渲染崩溃前内容。
+    let pendingTurns: unknown[] = [];
+    try {
+      const snapshot = await graph.current.getState({ configurable: { thread_id: threadId } });
+      const stateValues = snapshot?.values as AgentState | undefined;
+      const checkpointMessages = stateValues?.messages ?? [];
+      const dbMessages = await chatStore.getMessages(sessionId);
+      pendingTurns = checkpointMessages.slice(dbMessages.length);
+    } catch (exc) {
+      console.error(`[rpc] getResumable 读取 checkpoint 失败 (会话 ${sessionId}):`, exc);
+      return rpcOk(id, { resumable: false });
+    }
+    if (pendingTurns.length === 0) {
+      return rpcOk(id, { resumable: false });
+    }
+    return rpcOk(id, { resumable: true, pendingTurns });
+  }
+
+  // chat.discardResumable:放弃崩溃残留的未完成轮——清掉在途 thread 标记 + 删该 thread 的 checkpoint，
+  // 使其不再被 getResumable 探测到（之后该会话回到「干净空闲、可发新消息」的状态）。
+  if (body.method === "chat.discardResumable") {
+    const sessionId = params.sessionId;
+    if (typeof sessionId !== "string" || !sessionId) {
+      return rpcError(id, -32602, "缺少 sessionId");
+    }
+    // 正在跑就不该丢弃（应先打断）。
+    if (sessions.isBusy(sessionId)) {
+      return rpcError(id, -32000, "上一轮讨论还在进行,无法放弃");
+    }
+    const threadId = await chatStore.getPendingThread(sessionId);
+    // 先清 DB 里的在途标记；有 threadId 再顺手删它的 checkpoint，避免残留。
+    await chatStore.clearPendingThread(sessionId);
+    if (threadId) {
+      try {
+        await deleteThreadCheckpoints(threadId);
+      } catch (exc) {
+        console.error(`[rpc] discardResumable 删 checkpoint 失败 (会话 ${sessionId}):`, exc);
+      }
+    }
+    return rpcOk(id, { ok: true });
+  }
+
+  // chat.resume:从崩溃残留的 checkpoint 续跑未完成轮（仿 chat.send 不 await）。
+  if (body.method === "chat.resume") {
+    const sessionId = params.sessionId;
+    if (typeof sessionId !== "string" || !sessionId) {
+      return rpcError(id, -32602, "缺少 sessionId");
+    }
+    if (await chatStore.isSessionEnded(sessionId)) {
+      return rpcError(id, -32000, "会议已结束,无法继续讨论");
+    }
+    if (sessions.isBusy(sessionId)) {
+      return rpcError(id, -32000, "上一轮讨论还在进行");
+    }
+    const threadId = await chatStore.getPendingThread(sessionId);
+    if (!threadId) {
+      return rpcError(id, -32000, "没有可恢复的未完成轮次");
+    }
+    sessions.setBusy(sessionId, true);
+    const controller = new AbortController();
+    sessions.setController(sessionId, controller);
+    const running = resumeExecution(graph.current, sessionId, controller.signal);
+    running
+      .catch((exc) => {
+        console.error(`[rpc] resumeExecution 未捕获异常 (会话 ${sessionId}):`, exc);
+      })
+      .finally(() => {
+        sessions.setBusy(sessionId, false);
+        sessions.clearController(sessionId);
+      });
     return rpcOk(id, { ok: true });
   }
 

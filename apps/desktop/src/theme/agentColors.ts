@@ -9,6 +9,7 @@ const LIGHT_COLORS: Record<string, AgentColor> = {
   frontend: { bg: "#dcfce7", fg: "#166534", label: "前端" },
   tester: { bg: "#ffedd5", fg: "#9a3412", label: "测试" },
   pm: { bg: "#fce7f3", fg: "#9d174d", label: "产品经理" },
+  assistant: { bg: "#cffafe", fg: "#155e75", label: "回答助手" },
 };
 
 const LIGHT_FALLBACK: AgentColor = { bg: "#f3f4f6", fg: "#374151", label: "未知" };
@@ -22,6 +23,7 @@ const DARK_COLORS: Record<string, AgentColor> = {
   frontend: { bg: "#14402a", fg: "#86efac", label: "前端" },
   tester: { bg: "#45290f", fg: "#fdba74", label: "测试" },
   pm: { bg: "#45203a", fg: "#f9a8d4", label: "产品经理" },
+  assistant: { bg: "#164e5a", fg: "#a5f3fc", label: "回答助手" },
 };
 
 const DARK_FALLBACK: AgentColor = { bg: "#2a2a2d", fg: "#d1d5db", label: "未知" };

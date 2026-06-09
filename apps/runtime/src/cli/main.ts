@@ -49,6 +49,12 @@ async function runExecution(
 ): Promise<AgentState> {
   const initialState: AgentState = {
     requirement: currentRequirement,
+    // 预处理节点（rewrite_node / intent_node / route_node）入口跑时会填，这里给空初值
+    rewritten_query: "",
+    expansion_terms: "",
+    intent: "",
+    intent_score: 0,
+    route: "",
     // CLI 无登录用户概念，个人记忆恒为空串（memorySection 据此不加内容）。
     userMemory: "",
     // 带入历史轮的 messages，concat reducer 会在其上继续追加本轮发言，
@@ -67,9 +73,12 @@ async function runExecution(
   console.log();
 
   let finalState: AgentState = initialState;
+  // 编译带 checkpointer 后必须带 thread_id；CLI 每轮用一次性 id，不做恢复。
+  const threadId = `cli:${Date.now()}`;
   const stream = await graph.stream(initialState, {
     recursionLimit: 50, // 防失控的硬上限
     streamMode: "values",
+    configurable: { thread_id: threadId },
   });
   // 每个节点跑完吐一次 state，留最后一帧
   for await (const state of stream) {

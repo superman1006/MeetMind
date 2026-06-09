@@ -1,4 +1,18 @@
-# MeetMind — 多 Agent RAG 协作系统
+<div align="center">
+
+<img src="assets/banner.svg" alt="MeetMind" width="560"/>
+
+### 多 Agent RAG 协作系统 · Multi-Agent RAG Collaboration
+
+[![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![LangGraph](https://img.shields.io/badge/LangChain%20%2F%20LangGraph-1C3C3C?style=flat-square&logo=langchain&logoColor=white)](https://langchain-ai.github.io/langgraphjs/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?style=flat-square&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![pgvector](https://img.shields.io/badge/pgvector-008BB9?style=flat-square)](https://github.com/pgvector/pgvector)
+[![Transformers.js](https://img.shields.io/badge/Transformers.js-FFD21E?style=flat-square&logo=huggingface&logoColor=black)](https://huggingface.co/docs/transformers.js)
+
+</div>
+
+---
 
 基于 **LangChain + LangGraph + PostgreSQL（pgvector）+ 本地 cross-encoder Rerank** 的多角色 Agent 协作 Demo（TypeScript 实现）。
 模拟一个研发项目组：架构师、后端、前端、测试、产品经理 5 个 Agent，每个 Agent 拥有：

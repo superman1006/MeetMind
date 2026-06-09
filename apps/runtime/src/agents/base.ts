@@ -6,13 +6,10 @@
  */
 
 import {
-  AIMessage,
   type BaseMessage,
   HumanMessage,
   SystemMessage,
-  ToolMessage,
 } from "@langchain/core/messages";
-import type { ToolCall } from "@langchain/core/messages/tool";
 import type { Runnable } from "@langchain/core/runnables";
 import { ChatOpenAI } from "@langchain/openai";
 import { z } from "zod";
@@ -28,11 +25,11 @@ import { type RAGRetriever, getRetriever } from "../database/index.js";
 import { getLogger } from "../utils/logger.js";
 import { cleanBadChars} from "../utils/utils.js";
 import { streamStructuredContent } from "./streamStructured.js";
+import { runToolLoop } from "./toolLoop.js";
 // 全局工具清单（本地工具 + bootstrap 阶段异步登记的 MCP 工具）。
 // allTools 是共享数组引用：bootstrap 里追加的 MCP 工具，这里 bindTools 时也能看到。
 import { allTools } from "../tools/toolRegister.js";
 
-const _MAX_TOOL_ITERATIONS = 5;
 const logger = getLogger("agents.base");
 
 
@@ -192,9 +189,17 @@ export abstract class BaseAgent {
   abstract get systemPrompt(): string;
 
   /** 拼装本轮发言要喂给 LLM 的 user prompt：用户需求 + 历史 + 角色身份 + tools 使用守则。 */
-  protected _userPrompt(requirement: string, history: string): string {
+  protected _userPrompt(requirement: string, history: string, intent?: string): string {
+    // intent_node 的意图初判：只当一句弱提示，明确告知模型「仅供参考、别被它带偏」，
+    // 避免分类误判把正常需求挡掉——硬决策仍由角色自身按元规则做。
+    const trimmedIntent = (intent ?? "").trim();
+    let intentHint = "";
+    if (trimmedIntent) {
+      intentHint = `（系统对本次输入的意图初判为「${trimmedIntent}」，仅供参考，若与字面不符以字面为准。）\n`;
+    }
     return (
       `用户输入是：${requirement}\n` +
+      intentHint +
       `已有讨论历史是：${history || "(尚无讨论)"}\n` +
       "以下元规则优先级最高，高于你的角色默认行为：如果用户输入里有明确的字面指令必须严格遵守，不要无视、不要扩展、不要加戏；" +
       "如果用户输入只是闲聊或简单指令而不是真正的项目或技术需求，就照字面意思回应一句即可，不要拆解、不要写用户故事、不要写接口设计；" +
@@ -248,7 +253,7 @@ export abstract class BaseAgent {
    *
    * Phase 1 —— 工具循环（只 bindTools，不约束输出格式）
    *   LLM 自主决定调不调 RAG；调了就执行、把结果包成 ToolMessage 接回；
-   *   直到 LLM 不再要工具，或循环达 _MAX_TOOL_ITERATIONS 上限。
+   *   直到 LLM 不再要工具，或循环达 MAX_TOOL_ITERATIONS 上限。
    *
    * Phase 2 —— 结构化收尾（只 withStructuredOutput，不再带工具）
    *   在 Allmessages 末尾追加一条 HumanMessage 明确要求按 ModelOutput 汇总。
@@ -256,9 +261,15 @@ export abstract class BaseAgent {
   async invoke(
     requirement: string,
     conversationHistory: string,
+    // 走 CLI 就不会有 opts 参数
     opts?: {
       // 会话主人的个人记忆，拼到 systemPrompt 最前面（空串则不加）。
       userMemory?: string;
+      // intent_node 识别出的本轮意图标签，拼进 _userPrompt 当一句参考提示（空串则不加）。
+      intent?: string;
+      // rewrite_node 产出的检索扩展词，经 config 透传给 rag_search 拼到 query 后面提升召回（空串则不加）。
+      expansionTerms?: string;
+      // 当 phase 2 结构化收尾时，content 又多出一小段字，就调一次这个回调，把「新增的那截」传出去
       onDelta?: (text: string) => void;
       onToolUse?: (toolName: string) => void;
       // 每次工具执行完成后调一次，带上该次调用的 name/args/result（前端据此加按钮 + 展开结果）。
@@ -279,7 +290,9 @@ export abstract class BaseAgent {
     // 2) 准备 prompts（工具已在构造阶段绑好，这里只清零本轮 RAG 调用计数）
     this.RAGRetriever.restart();
 
-    const userPrompt = cleanBadChars(this._userPrompt(requirement_cleaned, history_cleaned));
+    const userPrompt = cleanBadChars(
+      this._userPrompt(requirement_cleaned, history_cleaned, opts?.intent),
+    );
     // systemPrompt 由三段拼成（顺序固定）：用户记忆 + 角色提示词 + 路由提示词。
     const memoryPrompt = memorySection(opts?.userMemory ?? "");
     const systemPrompt = cleanBadChars(memoryPrompt + this.systemPrompt + this._routingPrompt());
@@ -293,87 +306,20 @@ export abstract class BaseAgent {
     const toolCallRecords: ToolCallRecord[] = [];
 
     // ===== Phase 1：工具循环 =====
-    // _modelWithTools 在构造阶段就已 bindTools，这里直接复用
+    // _modelWithTools 在构造阶段就已 bindTools；工具循环抽到 toolLoop.ts，和右侧回答助手共用。
+    // directAnswer：模型本轮不调工具、直接拟好的回答（如「你有什么工具」这种问题）。
+    // 这段文本只活在 Phase 1 的 assistant 消息里、用户看不到，必须捞出来喂进 Phase 2 当 content 种子，
+    // 否则会被「不要复读上文」的收尾提示词吞掉（前端只显示 Phase 2 的 content）。
+    let directAnswer = "";
     try {
-      // exhausted 是使用工具次数是否达到上限的标志；如果达到上限就强制进入 Phase 2，避免讨论卡死在工具调用上
-      let exhausted = true;
-      for (let i = 0; i < _MAX_TOOL_ITERATIONS; i++) {
-        const aiMsg = (await this._modelWithTools.invoke(Allmessages)) as AIMessage;
-        Allmessages.push(aiMsg);
-
-        // LLM 不再要工具，结束循环进收尾
-        const toolCalls: ToolCall[] = aiMsg.tool_calls ?? [];
-        if (toolCalls.length === 0) {
-          // 工具使用没有达到上限，但是没有工具就退出循环了
-          exhausted = false;
-          break;
-        }
-
-        for (const tc of toolCalls) {
-          const toolName = tc.name ?? "";
-          const toolArgs = tc.args ?? {};
-          const toolId = tc.id ?? "";
-          logger.info(
-            `[${this.name}] → 调用工具 ${toolName} args=${JSON.stringify(toolArgs)}`,
-          );
-          // 按名字从工具列表里找到要执行的工具；找不到就回一个占位提示，不让循环崩
-          let toolToRun = undefined;
-          for (const t of allTools) {
-            if (t.name === toolName) {
-              toolToRun = t;
-              break;
-            }
-          }
-          let toolResult: string;
-          if (toolToRun) {
-            // 工具的 risk 等级（自定义元数据，见各 *Tool.ts）；缺省视为 low。
-            // metadata 在具体工具实例上，但 StructuredToolInterface 没暴露它，按需窄化取一下。
-            const toolMeta = (toolToRun as { metadata?: Record<string, unknown> }).metadata;
-            const risk = (toolMeta?.risk as string | undefined) ?? "low";
-            // HITL 审批：risk 高于 low 且上层提供了 onToolApproval 时，执行前先等用户拍板。
-            let approved = true;
-            if (risk !== "low" && opts?.onToolApproval) {
-              approved = await opts.onToolApproval({
-                toolName,
-                risk,
-                args: toolArgs as Record<string, unknown>,
-              });
-            }
-            if (!approved) {
-              // 用户拒绝：跳过执行。仍要给这次 tool_call 一个结果（否则 OpenAI 协议
-              // 会因 tool_call_id 没有对应 ToolMessage 而报错），用一句占位说明代替。
-              toolResult = "(用户拒绝使用该工具)";
-            } else {
-              // 服务端路径:工具执行前通知前端显示 "UsingTools: <工具名>" 标签
-              opts?.onToolUse?.(toolName);
-              // 通过 config 把自己的 agent 名传给工具（rag_search 据此查对应私有表；web_search 忽略）
-              const out = await toolToRun.invoke(toolArgs, {
-                configurable: { agentName: this.name },
-              });
-              // 工具 invoke 可能返回 string 或 ToolMessage；统一收敛成字符串
-              toolResult = typeof out === "string" ? out : JSON.stringify(out);
-            }
-          } else {
-            toolResult = `(未知工具: ${toolName})`;
-          }
-          // 记下这次调用的明细(name/args/result)：收集起来落库，并实时回调给前端加按钮
-          const record: ToolCallRecord = {
-            name: toolName,
-            args: toolArgs as Record<string, unknown>,
-            result: toolResult,
-          };
-          toolCallRecords.push(record);
-          opts?.onToolResult?.(record);
-          Allmessages.push(
-            new ToolMessage({ content: toolResult, tool_call_id: toolId }),
-          );
-        }
-      }
-      if (exhausted) {
-        logger.warning(
-          `[${this.name}] 工具调用次数已达上限 (${_MAX_TOOL_ITERATIONS})，强制进入结构化收尾阶段`,
-        );
-      }
+      directAnswer = await runToolLoop(this._modelWithTools, Allmessages, toolCallRecords, {
+        callerName: this.name,
+        agentName: this.name,
+        expansionTerms: opts?.expansionTerms,
+        onToolUse: opts?.onToolUse,
+        onToolResult: opts?.onToolResult,
+        onToolApproval: opts?.onToolApproval,
+      });
     } catch (exc) {
       logger.error(`[${this.name}] Phase 1 工具循环失败: ${String(exc)}`);
       return this._buildAgentResponse({
@@ -384,12 +330,26 @@ export abstract class BaseAgent {
     }
 
     // ===== Phase 2：结构化收尾 =====
-    const structurePrompt =
+    // content 必须「自包含」：上面那些过程性文本（Phase 1 的 assistant 回答、工具结果）用户都看不到，
+    // 只有这里的 content 会显示。所以不能只写「见上文」之类指代——本轮要回答用户的内容要完整落在 content 里。
+    let structurePrompt =
       "以上是你（和工具）已经产出的全部上下文。" +
       "请基于以上信息，按 ModelOutput 三字段输出最终结果：\n" +
-      "  • content    : 给团队看的正文（不要重复罗列上面已说过的话，给出最终结论 / 建议 / 行动项即可）\n" +
+      "  • content    : 给团队看的正文，必须能被独立阅读——上面那些过程内容用户看不到，" +
+      "所以不要只写「见上文 / 如上所述」之类指代，要把本轮的最终结论 / 建议 / 行动项 / 清单本身完整写进来；" +
+      "（多轮历史里早已说过的旧话可以不复读，但「本轮要回答用户的内容」必须完整出现在这里）\n" +
       "  • next_agent : 下一个发言 agent（architect / backend / frontend / tester / pm 之一）\n" +
       "  • done       : 'true' 或 'false'";
+    // 若 Phase 1 已直接拟好回答，把它作为 content 主体喂回去，避免模型凭记忆缩写成一句指代。
+    const directAnswer_trimmed = directAnswer.trim();
+    if (directAnswer_trimmed) {
+      structurePrompt +=
+        "\n\n你本轮已直接拟好下面这段回答，请把它作为 content 的主体" +
+        "（可润色 / 补充，但不要丢内容、不要缩写成一句指代）：\n" +
+        "----\n" +
+        directAnswer_trimmed +
+        "\n----";
+    }
     Allmessages.push(new HumanMessage(structurePrompt));
 
     // 不带工具，强制按 ModelOutput schema 输出
@@ -399,9 +359,14 @@ export abstract class BaseAgent {
 
     let finalOutput: ModelOutput;
     try {
+      // opts?.onDelta代表是否启用流式收尾
       if (opts?.onDelta) {
-        // 服务端路径:流式收尾,逐段吐 content 增量(真·token 打字机)
+        // .stream 流式调用并返回
+        // structuredModel.stream() 会一帧帧吐出不完整的 { content?, next_agent?, done? }（content 往往越来越长）
         const partialStream = await structuredModel.stream(Allmessages);
+        
+        // 逐段吐 content 增量(真·token 打字机)
+        // 若当前帧的 content 比已发出的更长 → 取出 增量 increment → 调 onDelta(increment)
         const lastPartial = await streamStructuredContent<ModelOutput>(
           partialStream as AsyncIterable<Partial<ModelOutput>>,
           opts.onDelta,

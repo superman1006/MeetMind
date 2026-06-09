@@ -20,6 +20,7 @@ import {
   seedAdminUser,
 } from "./database/index.js";
 import { initMcpTools } from "./tools/mcp/mcpClient.js";
+import { getCheckpointer } from "./graph/checkpointer.js";
 import { pathExists, printSystem } from "./utils/utils.js";
 import { setupLogging } from "./utils/logger.js";
 
@@ -58,6 +59,10 @@ export async function bootstrap(): Promise<void> {
   // ---------- 会话 / 消息表 ----------
   await ensureChatTables();
   printSystem(chalk.green("✓ 会话 / 消息表已就绪"));
+
+  // ---------- LangGraph checkpoint 表（断点续跑）----------
+  await getCheckpointer().setup();
+  printSystem(chalk.green("✓ LangGraph checkpoint 表已就绪（断点续跑）"));
 
   // ---------- 用户表（登录鉴权）+ 种子 admin ----------
   await ensureUserTable();

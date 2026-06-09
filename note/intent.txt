@@ -1,0 +1,11 @@
+一共 6 个自定义的意图标签
+ "项目技术需求",
+  "闲聊问候",
+  "知识问答",
+  "任务指令",
+  "需要澄清"
+  "其他"
+
+
+模型使用的是
+    本地的Xenova/mDeBERTa-v3-base-mnli-xnli——一个多语 NLI（Natural Language Inference，自然语言推理）模型      NLI

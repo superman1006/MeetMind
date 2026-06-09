@@ -21,6 +21,9 @@ import { listDirTool } from "./listDirTool.js";
 import { readFileTool } from "./readFileTool.js";
 import { fileEditTool } from "./fileEditTool.js";
 import { webFetchTool } from "./webFetchTool.js";
+import { grepTool } from "./grepTool.js";
+import { globTool } from "./globTool.js";
+import { writeFileTool } from "./writeFileTool.js";
 
 /** 工具登记表：register(tool) 往 allTools 数组里 push。 */
 export class ToolRegister {
@@ -40,6 +43,9 @@ toolRegister.register(listDirTool);
 toolRegister.register(readFileTool);
 toolRegister.register(fileEditTool);
 toolRegister.register(webFetchTool);
+toolRegister.register(grepTool);
+toolRegister.register(globTool);
+toolRegister.register(writeFileTool);
 
 // 与 toolRegister.allTools 同引用；MCP 工具稍后由 initMcpTools() 追加进这同一个数组。
 export const allTools = toolRegister.allTools;

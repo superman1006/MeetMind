@@ -1,0 +1,4 @@
+第一层:优化prompt 提示词要求模型输出指定格式的 JSON
+第二层:model.withStructuredOutput强约束模型输出
+第三层:使用 zod 定义 JSON schema，确保模型输出符合预期的结构
+第四层:自定义函数兜底，设置默认nextagent是架构师，done 为 false

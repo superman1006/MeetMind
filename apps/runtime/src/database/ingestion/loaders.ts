@@ -6,6 +6,7 @@
  */
 
 import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 
 import { getLogger } from "../../utils/logger.js";
@@ -117,8 +118,16 @@ export async function loadMarkdown(filePath: string): Promise<RawDoc[]> {
 
 /** 读 PDF：用 pdfjs-dist 逐页抽 text，每页一条 RawDoc，source 标 `file#pageN`。 */
 export async function loadPdf(filePath: string): Promise<RawDoc[]> {
-  // pdfjs-dist 4.x 默认入口就是 build/pdf.mjs（ESM）
-  const pdfjs = await import("pdfjs-dist");
+  // 用 legacy 构建：Node 环境下兼容性更好，消除 "Please use the legacy build" 告警
+  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+
+  // 定位 pdfjs-dist 自带的标准字体目录，传给 standardFontDataUrl；
+  // 否则解析依赖标准字体的 PDF 时会报 "Ensure that the standardFontDataUrl ..."。
+  // Node 端的工厂用 `baseUrl + filename` 直接 readFile，所以这里要给到目录路径并以分隔符结尾。
+  const require = createRequire(import.meta.url);
+  const pdfjsRoot = path.dirname(require.resolve("pdfjs-dist/package.json"));
+  const standardFontDataUrl = path.join(pdfjsRoot, "standard_fonts") + path.sep;
+
   const data = new Uint8Array(await readFile(filePath));
   const loadingTask = pdfjs.getDocument({
     data,
@@ -126,6 +135,7 @@ export async function loadPdf(filePath: string): Promise<RawDoc[]> {
     disableFontFace: true,
     isEvalSupported: false,
     useSystemFonts: false,
+    standardFontDataUrl,
   });
   const pdf = await loadingTask.promise;
 

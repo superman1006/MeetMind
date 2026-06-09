@@ -4,12 +4,26 @@
 
 import { END } from "@langchain/langgraph";
 
-import { ARCHITECT, isAgentName } from "../config/constants.js";
+import { ARCHITECT, ASSISTANT, isAgentName } from "../config/constants.js";
 import { getSettings } from "../config/settings.js";
 import { getLogger } from "../utils/logger.js";
+import { ROUTE_CHAT } from "./preprocess/routeNode.js";
 import type { AgentState } from "./state.js";
 
 const logger = getLogger("graph.route");
+
+/**
+ * 预处理流水线（rewrite → intent → route）之后的分叉条件边。
+ * 只读 route_node 已经写好的 state.route 做纯分派，决策本身在 route_node 里完成：
+ *   route === "chat" → 右侧回答助手单节点（assistant_node）
+ *   其余（含空串 / "team"）→ 左侧架构师全团队（architect_node），安全兜底。
+ */
+export function routeAfterPreprocess(state: AgentState): string {
+  if (state.route === ROUTE_CHAT) {
+    return `${ASSISTANT}_node`;
+  }
+  return `${ARCHITECT}_node`;
+}
 
 /**
  * 根据上一 agent 的输出决定下一图节点。

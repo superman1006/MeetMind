@@ -55,6 +55,16 @@ const SettingsSchema = z.object({
   // ONNX 量化精度：q8 体积小（~280MB）且 rerank 分数对量化不敏感；要更准可设 fp32
   rerankDtype: z.string().default("q8"),
 
+  // ---------- 本地意图识别（zero-shot NLI，走 @huggingface/transformers）----------
+  // 默认 mDeBERTa-v3-base-mnli-xnli：多语 NLI（含中文），ONNX 版做 zero-shot 意图分类；
+  // 模型缓存复用 embeddingCacheDir，首次约 400MB。无 torch 依赖，纯 ONNX。
+  intentModelName: z.string().default("Xenova/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7"),
+  // ONNX 量化精度：q8 体积小、意图粗分类对量化不敏感；要更准可设 fp32
+  intentDtype: z.string().default("q8"),
+  // 右侧分流阈值：意图命中「闲聊 / 知识问答」且置信分 ≥ 此值，才走「回答助手」单节点；
+  // 否则（低置信 / 其它意图 / 分类失败）一律落回架构师全团队。NLI 偏脆，阈值给得保守一点更稳。
+  intentRouteThreshold: z.coerce.number().default(0.5),
+
   // ---------- 检索参数 ----------
   retrieveTopN: z.coerce.number().default(20),
   rerankTopN: z.coerce.number().default(5),
@@ -103,6 +113,9 @@ export function getSettings(): Settings {
     embeddingCacheDir: process.env.EMBEDDING_CACHE_DIR ?? "models",
     rerankModelName: process.env.RERANK_MODEL_NAME,
     rerankDtype: process.env.RERANK_DTYPE,
+    intentModelName: process.env.INTENT_MODEL_NAME,
+    intentDtype: process.env.INTENT_DTYPE,
+    intentRouteThreshold: process.env.INTENT_ROUTE_THRESHOLD,
     retrieveTopN: process.env.RETRIEVE_TOP_N,
     rerankTopN: process.env.RERANK_TOP_N,
     baiduSearchMcpUrl: process.env.BAIDU_SEARCH_MCP_URL,
@@ -111,12 +124,19 @@ export function getSettings(): Settings {
     maxIterations: process.env.MAX_ITERATIONS,
   };
 
-  // 把 undefined 字段剔掉，让 zod 走 default
+  // 把 undefined / 空字符串字段剔掉，让 zod 走 default。
+  // 注意：.env 里写 `KEY=`（留空）会给出空串 "" 而非 undefined，若不一并剔除就会
+  // 绕过 zod 的 .default(...)（default 只对 undefined 生效），导致「留空 ≠ 用默认值」
+  // 反而落成空值（如空模型名 / MAX_TOKENS 被 coerce 成 0）。统一把空串也当作未设置。
   const filtered: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(raw)) {
-    if (v !== undefined) {
-      filtered[k] = v;
+    if (v === undefined) {
+      continue;
     }
+    if (typeof v === "string" && v.trim() === "") {
+      continue;
+    }
+    filtered[k] = v;
   }
 
   const parsed = SettingsSchema.parse(filtered); // 校验并填默认

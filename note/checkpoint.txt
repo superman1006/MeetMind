@@ -1,0 +1,18 @@
+checkpointer 保存的是 每个节点跑完后的整个 state 快照
+
+====================================================================================================
+checkpoint 当前为空
+
+一次调用
+graph.stream(initialState, {thread_id})  ← 起跑时先存一帧「输入」checkpoint
+   → rewrite_node 跑完      → 存一帧
+   → intent_node 跑完       → 存一帧
+   → architect_node 跑完    → 存一帧
+   → backend_node 跑完      → 存一帧
+   → frontend_node 跑完     → 存一帧
+   → … 每经过一个 agent 节点 → 存一帧
+   → architect(done) → END
+
+
+====================================================================================================
+存在PG 数据库中

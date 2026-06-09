@@ -13,6 +13,7 @@ import type { LangGraphRunnableConfig } from "@langchain/langgraph";
 
 import { ArchitectAgent } from "../agents/architect.js";
 import type { AgentResponse, BaseAgent, ToolCallRecord } from "../agents/base.js";
+import { AssistantAgent } from "../agents/assistant.js";
 import { BackendAgent } from "../agents/backend.js";
 import { FrontendAgent } from "../agents/frontend.js";
 import { PMAgent } from "../agents/pm.js";
@@ -20,6 +21,7 @@ import { TesterAgent } from "../agents/tester.js";
 import {
   AGENT_NAMES,
   ARCHITECT,
+  ASSISTANT,
   BACKEND,
   FRONTEND,
   PM,
@@ -28,7 +30,11 @@ import {
 import { printAgentInfo } from "../utils/utils.js";
 import { getLogger } from "../utils/logger.js";
 import * as toolApprovals from "../server/toolApprovals.js";
-import { routeToWhichAgent } from "./route.js";
+import { createIntentNode } from "./preprocess/intentNode.js";
+import { createRewriteNode } from "./preprocess/rewriteNode.js";
+import { createRouteNode } from "./preprocess/routeNode.js";
+import { routeAfterPreprocess, routeToWhichAgent } from "./route.js";
+import { getCheckpointer } from "./checkpointer.js";
 import {
   AgentStateAnnotation,
   type AgentState,
@@ -65,7 +71,13 @@ function createNode(agent: BaseAgent) {
     state: AgentState,
     config: LangGraphRunnableConfig,
   ): Promise<Partial<AgentState>> => {
-    const requirement = state.requirement ?? "";
+    // 喂给 agent 的是 rewrite_node 改写后的独立句（指代已消解）；为空兜底回原始输入。
+    // 注意只影响 LLM 读到的内容；展示 / 落库用的「用户原话」是另一条 user message，不受这里影响。
+    const requirement = state.rewritten_query || state.requirement || "";
+    // 检索扩展词（rewrite_node 产出）：经 config 透传给 rag_search 拼到 query 后面，仅用于召回
+    const expansionTerms = state.expansion_terms ?? "";
+    // 意图标签（intent_node 产出）：透传进 _userPrompt 当一句参考提示
+    const intent = state.intent ?? "";
     const history = formatHistory(state.messages ?? []); // 历史发言拼成文本喂给 agent
     const iteration = (state.iteration ?? 0) + 1; // 轮次 +1，供安全阀判断
     const turnId = `${agent.name}-${iteration}`;
@@ -134,13 +146,19 @@ function createNode(agent: BaseAgent) {
     if (onDelta) {
       response = await agent.invoke(requirement, history, {
         userMemory,
+        intent,
+        expansionTerms,
         onDelta,
         onToolUse,
         onToolResult,
         onToolApproval,
       });
     } else {
-      response = await agent.invoke(requirement, history, { userMemory });
+      response = await agent.invoke(requirement, history, {
+        userMemory,
+        intent,
+        expansionTerms,
+      });
     }
 
     // 把本轮用过的工具名挂到 response,随消息落库;前端据此常驻 "UsingTools: <工具名>"
@@ -176,6 +194,104 @@ function createNode(agent: BaseAgent) {
 }
 
 /**
+ * 把「回答助手」包成 LangGraph 节点（右侧单节点工作流）。
+ * 流式 plumbing 与 createNode 一致（turn_start / delta / using_tools / tool_result / tool_approval / turn_end），
+ * 但调的是 assistant.answer()（纯文本流式、不结构化）。刻意【不碰 iteration / next_agent】——
+ * 右侧与左侧团队隔离，答完只追加这条消息 + 标记 done，由图直接 → END。
+ */
+function createAssistantNode() {
+  const assistant = new AssistantAgent();
+  return async (
+    state: AgentState,
+    config: LangGraphRunnableConfig,
+  ): Promise<Partial<AgentState>> => {
+    // 喂给助手的是改写后的独立句；为空兜底回原始输入
+    const requirement = state.rewritten_query || state.requirement || "";
+    const expansionTerms = state.expansion_terms ?? "";
+    const history = formatHistory(state.messages ?? []);
+    const userMemory = state.userMemory ?? "";
+    const turnId = `${ASSISTANT}-1`; // 单节点工作流，本轮只发言一次
+
+    logger.info(`[graph] → invoking ${ASSISTANT}_node（右侧回答助手）`);
+
+    const writer = config.writer;
+    if (writer) {
+      writer({ kind: "turn_start", turnId, agent_name: assistant.name, role: assistant.role });
+    }
+
+    // 与 createNode 同形态的回调（有 writer 才发流式事件；CLI 无 writer 走非流式）
+    let onDelta: ((text: string) => void) | undefined = undefined;
+    let onToolUse: ((toolName: string) => void) | undefined = undefined;
+    let onToolResult: ((rec: ToolCallRecord) => void) | undefined = undefined;
+    let onToolApproval:
+      | ((info: { toolName: string; risk: string; args: Record<string, unknown> }) => Promise<boolean>)
+      | undefined = undefined;
+    const toolsUsed: string[] = [];
+    let approvalSeq = 0;
+    if (writer) {
+      onDelta = (text: string) => {
+        writer({ kind: "delta", turnId, text });
+      };
+      onToolUse = (toolName: string) => {
+        writer({ kind: "using_tools", turnId, tool: toolName });
+        if (!toolsUsed.includes(toolName)) {
+          toolsUsed.push(toolName);
+        }
+      };
+      onToolResult = (rec: ToolCallRecord) => {
+        writer({ kind: "tool_result", turnId, name: rec.name, args: rec.args, result: rec.result });
+      };
+      onToolApproval = async (info) => {
+        const approvalId = `${turnId}-${approvalSeq}`;
+        approvalSeq += 1;
+        writer({
+          kind: "tool_approval_request",
+          turnId,
+          approvalId,
+          tool: info.toolName,
+          risk: info.risk,
+          args: info.args,
+        });
+        const approved = await toolApprovals.createPending(approvalId, config.signal);
+        return approved;
+      };
+    }
+
+    let response;
+    if (onDelta) {
+      response = await assistant.answer(requirement, history, {
+        userMemory,
+        expansionTerms,
+        onDelta,
+        onToolUse,
+        onToolResult,
+        onToolApproval,
+      });
+    } else {
+      response = await assistant.answer(requirement, history, { userMemory, expansionTerms });
+    }
+
+    if (toolsUsed.length > 0) {
+      response.tool = toolsUsed.join(", ");
+    }
+
+    printAgentInfo({
+      agentName: response.agent_name,
+      message: response.message,
+      nextRole: "DONE",
+      usedRag: response.used_rag,
+    });
+
+    if (writer) {
+      writer({ kind: "turn_end", turnId, next_agent: null, done: true, used_rag: response.used_rag });
+    }
+
+    // 右侧工作流：只追加这条消息 + 标记本轮完成；绝不碰 iteration（与左侧团队隔离）。
+    return { messages: [response], done: true };
+  };
+}
+
+/**
  * 编译并返回多 Agent 图。
  */
 export function buildGraph() {
@@ -190,7 +306,7 @@ export function buildGraph() {
       router: typeof routeToWhichAgent,
       map: Record<string, string>,
     ) => void;
-    compile: () => ReturnType<StateGraph<typeof AgentStateAnnotation.spec>["compile"]>;
+    compile: (options?: { checkpointer?: unknown }) => ReturnType<StateGraph<typeof AgentStateAnnotation.spec>["compile"]>;
   };
 
   // 1. 加节点
@@ -202,8 +318,25 @@ export function buildGraph() {
     graph.addNode(`${name}_node`, createNode(agent));
   }
 
-  // 2. 入口固定为架构师
-  graph.addEdge(START, `${ARCHITECT}_node`);
+  // 1.5 预处理流水线：rewrite_node（改写 + 扩展）→ intent_node（意图识别）→ route_node（分流决策）。
+  // 三者每轮只在入口跑一次，不参与 agent 间路由、不计入 iteration（只返回各自字段）。
+  graph.addNode("rewrite_node", createRewriteNode());
+  graph.addNode("intent_node", createIntentNode());
+  graph.addNode("route_node", createRouteNode());
+
+  // 1.6 右侧「回答助手」单节点工作流（与左侧团队隔离，只共享 AgentState + 同一批工具）。
+  graph.addNode(`${ASSISTANT}_node`, createAssistantNode());
+
+  // 2. 入口：START → 改写 → 意图 → 分流；route_node 后按 state.route 走「助手」或「架构师全团队」。
+  graph.addEdge(START, "rewrite_node");
+  graph.addEdge("rewrite_node", "intent_node");
+  graph.addEdge("intent_node", "route_node");
+  graph.addConditionalEdges("route_node", routeAfterPreprocess, {
+    [`${ASSISTANT}_node`]: `${ASSISTANT}_node`,
+    [`${ARCHITECT}_node`]: `${ARCHITECT}_node`,
+  });
+  // 助手答完即结束，不进协作循环
+  graph.addEdge(`${ASSISTANT}_node`, END);
 
   // 3. 条件边：routeMap 把 router 返回值映射到实际节点
   const routeMap: Record<string, string> = {};
@@ -216,7 +349,7 @@ export function buildGraph() {
     graph.addConditionalEdges(`${name}_node`, routeToWhichAgent, routeMap);
   }
 
-  const compiled = graph.compile();
+  const compiled = graph.compile({ checkpointer: getCheckpointer() });
   const nodeNames: string[] = [];
   for (const n of AGENT_NAMES) {
     nodeNames.push(`${n}_node`);
