@@ -48,8 +48,9 @@ export async function runExecution(
     // 轮开始即登记在途 thread_id：崩溃时该标记残留 = 可恢复信号。
     await chatStore.setPendingThread(sessionId, threadId);
 
-    // 取该会话已有发言(从 DB)作为跨轮记忆起点(首轮为空)
-    const priorMessages = await chatStore.getMessages(sessionId);
+    // 取该会话「喂 LLM 的上下文」作为跨轮记忆起点：压过缩则是「摘要 + 边界后尾部」，没压过则是全量(首轮为空)。
+    // 注意：这里刻意不用 getMessages（那是给前端展示的全量）——LLM 历史走压缩后的读路径，控制上下文长度。
+    const priorMessages = await chatStore.getContextMessages(sessionId);
     const seedMessages = [...priorMessages, userTurn];
 
     // 按会话主人(owner=用户名)加载其个人记忆，本轮整轮共用，拼到各 agent 的 systemPrompt 最前面。
@@ -143,8 +144,9 @@ export async function resumeExecution(
       sseServer.send(sessionId, "round_done", { done: false });
       return;
     }
-    // 崩溃轮从未落库，当前 DB 条数 == 该轮开始时的基线。
-    const priorMessages = await chatStore.getMessages(sessionId);
+    // 崩溃轮从未落库，且恢复发生在重启时（其间无新消息 / 无新压缩），
+    // 故当前「上下文消息条数」== 该轮 seed 时的基线（与 runExecution 的 seed 路径一致，含合成摘要那一条）。
+    const priorMessages = await chatStore.getContextMessages(sessionId);
     const priorCount = priorMessages.length;
 
     let finalState: AgentState | null = null;

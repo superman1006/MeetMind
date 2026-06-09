@@ -20,6 +20,8 @@ import {
   seedAdminUser,
 } from "./database/index.js";
 import { initMcpTools } from "./tools/mcp/mcpClient.js";
+import { allTools } from "./tools/toolRegister.js";
+import { getLoadedSkills } from "./tools/skillTool.js";
 import { getCheckpointer } from "./graph/checkpointer.js";
 import { pathExists, printSystem } from "./utils/utils.js";
 import { setupLogging } from "./utils/logger.js";
@@ -150,5 +152,26 @@ export async function bootstrap(): Promise<void> {
     printSystem(chalk.green(`✓ MCP 工具已加载：${mcpCount} 个（web 搜索经百度 AI Search MCP，工具名 AIsearch）`));
   } else {
     printSystem(chalk.dim("MCP 工具：未加载（未配置 BAIDU_SEARCH_API_KEY 或连接失败，web 搜索不可用）"));
+  }
+
+  // ---------- 展示已加载的 tools（本地 + 上面追加进同一数组的 MCP 工具，agent 构造时会 bindTools 它们） ----------
+  if (allTools.length > 0) {
+    printSystem(chalk.green(`✓ tools 已加载：${allTools.length} 个`));
+    for (const t of allTools) {
+      printSystem(`   · ${chalk.cyan(t.name)}`);
+    }
+  } else {
+    printSystem(chalk.dim("tools：未加载（toolRegister 为空）"));
+  }
+
+  // ---------- 展示已加载的 skills（启动时从 skills/ 扫得，绑在每个 agent 的 skill 工具上） ----------
+  const skills = getLoadedSkills();
+  if (skills.length > 0) {
+    printSystem(chalk.green(`✓ skills 已加载：${skills.length} 个`));
+    for (const skill of skills) {
+      printSystem(`   · ${chalk.cyan(skill.name)}`);
+    }
+  } else {
+    printSystem(chalk.dim("skills：未加载（skills/ 目录为空或不存在）"));
   }
 }

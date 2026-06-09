@@ -116,7 +116,12 @@ async function copyToolCall(): Promise<void> {
           :class="{ active: openIndex === i }"
           :title="`查看 ${call.name} 的调用结果`"
           @click="toggle(i)"
-        >🔧 {{ call.name }}</button>
+        >
+          <svg class="tool-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18v3h3l6.3-6.3a4 4 0 0 0 5.4-5.4l-2.3 2.3a1.5 1.5 0 0 1-2.1-2.1z" />
+          </svg>
+          <span class="tool-name">{{ call.name }}</span>
+        </button>
       </div>
 
       <TypingDots v-if="thinking" />
@@ -207,21 +212,35 @@ async function copyToolCall(): Promise<void> {
 :root[data-theme="dark"] .markdown :deep(code) { background: rgba(255, 255, 255, 0.14); }
 :root[data-theme="dark"] .markdown :deep(pre) { background: rgba(255, 255, 255, 0.1); }
 
-/* 工具按钮:一排小药丸,每个对应一次工具调用 */
-.tools { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+/* 工具按钮:一排小药丸,每个对应一次工具调用。
+   软底填充 + 极淡描边,比硬描边(border: currentColor)更耐看、不抢正文 */
+.tools { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 .tool-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   font-size: 11px;
-  padding: 2px 8px;
-  border: 1px solid currentColor;
+  font-weight: 500;
+  line-height: 1;
+  padding: 4px 10px 4px 7px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
   border-radius: 999px;
-  background: transparent;
+  background: rgba(0, 0, 0, 0.05);
   color: inherit;
   cursor: pointer;
-  opacity: 0.8;
-  transition: opacity 0.12s, background 0.12s;
+  opacity: 0.85;
+  transition: opacity 0.12s, background 0.12s, border-color 0.12s;
 }
-.tool-btn:hover { opacity: 1; }
-.tool-btn.active { background: rgba(0, 0, 0, 0.14); opacity: 1; font-weight: 600; }
+.tool-btn:hover { opacity: 1; background: rgba(0, 0, 0, 0.09); }
+.tool-btn.active {
+  background: rgba(0, 0, 0, 0.12);
+  border-color: rgba(0, 0, 0, 0.16);
+  opacity: 1;
+  font-weight: 600;
+}
+/* 扳手图标:跟随文字色,略淡一点跟文字拉开层次 */
+.tool-icon { width: 12px; height: 12px; flex-shrink: 0; opacity: 0.65; }
+.tool-name { display: inline-block; }
 
 /* 结果面板:浅色内嵌卡片,结果超长可滚动 */
 .tool-panel {
@@ -251,7 +270,15 @@ async function copyToolCall(): Promise<void> {
 
 /* 深色主题:气泡改成深底亮字后,工具按钮/结果面板的黑白叠加层要反过来,
    否则浅色面板上的亮字读不清。:root 选中 <html data-theme>,面板在本组件内仍受作用域限定。 */
-:root[data-theme="dark"] .tool-btn.active { background: rgba(255, 255, 255, 0.16); }
+:root[data-theme="dark"] .tool-btn {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.08);
+}
+:root[data-theme="dark"] .tool-btn:hover { background: rgba(255, 255, 255, 0.13); }
+:root[data-theme="dark"] .tool-btn.active {
+  background: rgba(255, 255, 255, 0.18);
+  border-color: rgba(255, 255, 255, 0.22);
+}
 :root[data-theme="dark"] .tool-panel {
   border-color: rgba(255, 255, 255, 0.18);
   background: rgba(255, 255, 255, 0.07);

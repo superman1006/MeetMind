@@ -132,7 +132,9 @@ describe("getMessages", () => {
     expect(typeof msgs[0].created_at).toBe("string");
     const [sql, params] = mockQuery.mock.calls[0];
     expect(String(sql)).toContain("ORDER BY seq ASC");
-    expect(params).toEqual(["s1"]);
+    // getMessages 现委托给 getMessagesAfterSeq(s, -1)：全量 == seq > -1。
+    expect(String(sql)).toContain("seq > $2");
+    expect(params).toEqual(["s1", -1]);
   });
 });
 

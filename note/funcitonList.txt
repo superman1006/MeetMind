@@ -1,0 +1,260 @@
+============================================================
+MeetMind 功能清单（Function List）
+============================================================
+说明：本清单不区分前后端，按「功能」组织。MeetMind 是一个多 Agent
+RAG 协作系统 demo，monorepo 结构：apps/runtime（后端，LangGraph 编排
++ PostgreSQL/pgvector + 本地模型）+ apps/desktop（前端，Vue + Tauri 壳）。
+
+
+============================================================
+一、两条工作流（一次输入只走其中一条，由意图分流自动决定）
+============================================================
+
+1) 回答助手工作流（单节点、问答型）
+   - 用于闲聊、打招呼、一问一答的知识/技术问题，不惊动开发团队。
+   - 单个 AssistantAgent 节点，答完即结束（done=true → END），不参与
+     多 agent 路由、不计 iteration，与团队工作流天然隔离。
+   - 两阶段：Phase 1 工具循环（可调 web_search / web_fetch 等，但默认
+     不调，且对它无私有 RAG）；Phase 2 纯自然语言流式收尾（打字机效果，
+     不结构化输出）。
+   - 实现：graph/builder.ts: createAssistantNode + agents/assistant.ts。
+
+2) 五角色会议工作流（多 Agent 协作型）
+   - 5 个角色 Agent：架构师(architect)、后端(backend)、前端(frontend)、
+     测试(tester)、产品经理(pm)。架构师是入口与终止者，其余角色在
+     LangGraph 条件边驱动下自由路由。
+   - 每个角色 Agent 拥有自己独立的 PostgreSQL 知识库表 + 私有 RAG 工具。
+   - 每轮 Agent 两阶段：Phase 1 让 LLM 自主调工具（最多 N 轮）；Phase 2
+     用 withStructuredOutput 强制输出 { content, next_agent, done } 三字段，
+     由条件边决定下一个发言者或结束。
+   - 安全阀：达到 maxIterations（默认 15）或架构师宣布 done 即强制结束，
+     图永不卡死；next_agent 非法时兜底回架构师。
+   - 实现：graph/builder.ts: createNode + buildAllAgents + agents/*.ts。
+
+
+============================================================
+二、入口预处理流水线（每轮入口只跑一次，不计 iteration）
+============================================================
+顺序：START → rewrite_node → intent_node → route_node → 分叉
+
+3) Query 改写 / 指代消解（rewrite_node）
+   - 用最近几轮历史把用户最新输入里的代词、省略补全成一句「独立、完整、
+     脱离上下文也能看懂」的话，写进 state.rewritten_query，供各 agent 阅读
+     与生成。
+   - 同时做 Query Expansion：补充同义/相关关键词写进 state.expansion_terms，
+     仅供检索层（rag_search）拼到 query 后提升召回，不进 agent 阅读 prompt。
+   - 用 LLM withStructuredOutput 一次产出两字段，temperature=0；失败降级为
+     「原始输入 + 无扩展词」。
+
+4) 意图识别（intent_node）
+   - 对改写后的独立句做 zero-shot 意图分类，标签：闲聊 / 知识问答 /
+     开发需求 / 任务指令。
+   - 模型：本地 BERT 系多语 NLI（Xenova/mDeBERTa-v3-base-xnli，q8，ONNX，
+     无需联网/API key），懒加载单例。
+   - 规则短路：超短问候（你好/hi/谢谢…，可带尾缀语气词）直接判「闲聊」、
+     跳过脆弱的 NLI，给满分 1。
+   - 失败/低置信返回空，按「无意图信号」降级。
+
+5) 分流决策（route_node）
+   - 读 intent_node 的标签 + 置信分：命中「闲聊/知识问答」且分数 ≥ 阈值
+     （intentRouteThreshold 默认 0.5）→ 走回答助手；其余（含分类失败、
+     低置信、开发需求/任务指令）→ 走架构师全团队。
+   - 兜底方向刻意偏向团队（安全默认），把决策落成一等公民节点（带日志 +
+     留 checkpoint）。
+
+
+============================================================
+三、RAG 知识库与混合检索
+============================================================
+
+6) 每 Agent 私有知识库（PostgreSQL + pgvector）
+   - 存储用 PostgreSQL（pgvector/pgvector:pg17），每个 agent 一张独立表
+     <prefix>_<agent>（列：id 主键 / content / metadata jsonb / embedding
+     vector(dim)）。
+   - 建表自动建好扩展：vector(pgvector) + pg_trgm，并建 HNSW 向量索引 +
+     GIN trigram 索引。
+   - 灌库支持多种文档格式：JSON / Markdown / PDF / Word(docx) / 纯文本(txt)，
+     按 data/seed/<agent>/ 子目录分发（loaders.ts 按后缀解析、splitters.ts
+     按类型二次切块）。
+   - 幂等灌库：用 <agent>_md5(content)[:12] 作主键，INSERT ... ON CONFLICT
+     DO NOTHING。
+
+7) 混合检索 + 重排（RAGRetriever.retrieve）
+   - 两路并行召回：
+       · 关键字召回：pg_trgm 的 word_similarity（按 trigram 衡量重叠）；
+       · 向量 kNN：query 经本地 embedding 算向量，pgvector cosine 距离算子
+         <=> 取最近 N 条。
+   - 按行 id 去重合并两路候选（候选数 retrieveTopN，默认 20）。
+   - 重排 rerank：把全部候选送本地 cross-encoder 逐条算 query↔候选 相关分，
+     按 relevanceScore 排序取前 K（rerankTopN，默认 5）返回给 LLM。
+   - 模型：embedding = Xenova/all-MiniLM-L6-v2（384 维，ONNX）；
+           reranker = Xenova/bge-reranker-base（q8，cross-encoder，多语/中文好）。
+     都本地运行、无 torch、无 Cohere/ES 依赖。
+   - 失败降级：rerank 失败 → 原序返回前 N 条；任一路检索 SQL 抛错 → 该路
+     返回空、另一路独立工作，链路不断。
+   - RAG 以 LangChain Tool（rag_search）形式由 LLM function-calling 自主调用，
+     不是 prompt 注入；查哪个 agent 的表由调用时 config.configurable.agentName
+     决定。
+
+
+============================================================
+四、Agent 工具集（所有 agent 共用同一批单例，按 risk 分级）
+============================================================
+工具集中在 tools/，每个工具一个文件直接 export 一个 LangChain tool() 单例，
+在 toolRegister.ts 里逐个 register 进同一个 allTools 数组，agent 构造时一次性
+bindTools(allTools)。当前工具（含 risk 等级）：
+
+8)  rag_search    (risk: low)    —— 私有 RAG 混合检索，见上节，按 agent 区分表。
+9)  web_search    (MCP, low)     —— 联网搜索，包百度 AI Search 的 MCP 服务
+                                     （SSEClientTransport，上游工具名 AIsearch），
+                                     与角色无关、搜公网；未配 key/连接失败时
+                                     返回提示串不抛错。bootstrap 阶段异步登记。
+10) web_fetch     (risk: medium) —— 抓取给定 URL 网页，HTML 剥成纯文本返回。
+11) read_file     (risk: low)    —— 读文件文本，带行号、支持 offset/limit。
+12) write_file    (risk: high)   —— 整文件写入/新建，自动建父目录；走 pathAuth
+                                     沙箱（必须在 PROJECT_ROOT 内）。
+13) file_edit     (risk: medium) —— 文件内精确字符串替换（支持 replace_all）。
+14) grep          (risk: low)    —— 目录子树内按正则搜文件内容，走 pathAuth 沙箱。
+15) glob          (risk: low)    —— 按通配符（**/*.ts 等）递归找文件，走沙箱。
+16) list_dir      (risk: low)    —— 列目录文件/子目录（标注 dir/file）。
+17) list_processes(risk: low)    —— ps aux 查进程，可按关键字过滤。
+18) echo          (risk: low)    —— 回显测试工具。
+19) skill         (risk: low)    —— 按名读取 src/skills/<name>/SKILL.md 把技能正文
+                                     返回到上下文（仿 Claude Code SkillTool 极简版，
+                                     启动时扫一次技能清单注入到工具 description）。
+                                     现存技能：code-review / project-flow-analyzer /
+                                     write-test。
+
+20) 工具路径沙箱（pathAuth）
+   - 文件类工具（write_file / grep / glob…）统一鉴权：路径解析为绝对路径后
+     校验落在 PROJECT_ROOT 子树内，越权直接拒绝并打 warning。防止 LLM 读写
+     项目目录之外。
+
+
+============================================================
+五、HITL 工具风险审批（人在环路）
+============================================================
+
+21) 高风险工具执行前需用户拍板
+   - Phase 1 工具循环里，risk 高于 low（medium/high）的工具在执行前先发
+     SSE 事件 tool_approval_request、挂起等用户决策（toolApprovals 内存
+     注册表），同意才执行、拒绝则跳过。
+   - 用户决策经 RPC（method=toolApproval）回传 resolve 挂起的 Promise；
+     用户打断本轮 → AbortSignal 触发 → 挂起 reject、丢弃本轮。
+   - 前端：ToolApprovalBar.vue 弹审批条。
+
+
+============================================================
+六、Checkpoint / 断点续跑
+============================================================
+
+22) LangGraph checkpoint 持久化
+   - 用 PostgresSaver（@langchain/langgraph-checkpoint-postgres）单例，复用
+     业务库 PG_URL，自管 checkpoints / checkpoint_blobs / checkpoint_writes
+     三张表；bootstrap 启动时 .setup() 建表。
+   - 编译图时 graph.compile({ checkpointer })，每轮讨论以 sessionId 作
+     thread_id 落 checkpoint：图在每个 node 步进时把当前 AgentState 快照写库。
+   - 续跑：进程崩溃/重启后，因 saver 是进程内单例，重建图（如 model.set 触发
+     buildGraph）复用同一 saver，可读到崩溃前最后一个 checkpoint。
+   - RPC 支持：chat.getResumable（查某会话是否有可续跑的 checkpoint）、
+     chat.resume（从 checkpoint 续跑）、chat.discardResumable（丢弃）；
+     deleteThreadCheckpoints 按 thread_id best-effort 清理。
+   - 实现：graph/checkpointer.ts + server/runExecution.ts(resumeExecution)。
+
+
+============================================================
+七、服务端 API（JSON-RPC over HTTP + SSE 流式推送）
+============================================================
+
+23) HTTP 总入口（httpServer）
+   - 对外两个窗口：POST /api（一问一答 JSON-RPC）+ GET /events（订阅式
+     SSE 长连）。带 CORS（供 Tauri 打包窗口用）、日志对 apiKey 脱敏。
+
+24) SSE 流式推送（sseServer）
+   - 单条 firehose 长连：整个前端只开一条 SSE，所有会话事件都从这条推下去，
+     每帧带 sessionId 由前端路由。
+   - 流式事件类型：turn_start / delta（打字机增量）/ using_tools /
+     tool_result / tool_approval_request / turn_end / round_done。
+
+25) JSON-RPC 方法清单（rpcServer，按 method 分诊）
+   - 用户/鉴权：user.login、user.registry（注册）、user.getMemory、
+     user.setMemory。
+   - 会话管理：session.create、session.list、session.messages、
+     session.rename、session.delete。
+   - 讨论控制：chat.send（跑一轮讨论）、chat.interrupt（打断）、
+     chat.getResumable / chat.resume / chat.discardResumable（断点续跑）、
+     chat.summaryTitle（首条输入生成标题）、chat.end（结束会议触发纪要）。
+   - 工具审批：toolApproval。
+   - 模型配置：model.get、model.set（运行时改 LLM 配置并 buildGraph 重建图）、
+     model.test（连通性测试）。
+
+26) 会话/消息持久化（chatStore）
+   - PostgreSQL 两张表：sessions（id/title/created_at/ended/owner 归属用户）
+     + messages（一行 = 一条 AgentResponse，session_id 外键级联删除）。
+   - 按 owner 隔离：每个会话挂在创建它的用户名下，列表只返回本人会话。
+   - created_at 由 DB DEFAULT now() 自动生成，仅前端展示发送时间，不进 LLM。
+
+27) 会话运行时状态（sessions）
+   - busy 标记（同会话串行）+ 进行中讨论的 AbortController（供 chat.interrupt
+     打断 graph.stream）；纯内存、重启即清。
+
+28) 用户登录鉴权（userStore）
+   - PostgreSQL user 表（id/username/password/memory）；单机 demo 明文存储/比对；
+     bootstrap 种子用户 admin/admin。
+   - 用户长期记忆（memory）：登录后随每轮加载进 state.userMemory，拼到
+     systemPrompt 最前，作为最高优先级背景。
+
+
+============================================================
+八、LLM 衍生功能（独立调一次 LLM，失败不阻断主流程）
+============================================================
+
+29) 会话标题摘要（titleSummary）
+   - 新会话首条用户输入 → LLM 总结成 ≤15 字的简短标题；与架构师讨论并发、
+     互不阻塞；失败/空标题返回空串不改名。
+
+30) 会议纪要整理（meetingSummary）
+   - 会议结束（chat.end）时：架构师出一份会议纪要 + 各角色 agent 出本职
+     工作段，组装成一份 markdown 写到 data/summary/{sessionId}.md，过程经
+     SSE 推进度。
+
+
+============================================================
+九、前端（apps/desktop，Vue + Pinia + Tauri 壳）
+============================================================
+
+31) 主要界面组件
+   - ChatWindow（讨论主窗）/ MessageBubble（气泡，含思考态 TypingDots、
+     工具标签、发送时间格式化）/ Composer（输入框）/ SessionList（会话列表）
+     / SessionSearch（会话搜索）/ ModelSettings（模型配置）/ UserMemory
+     （用户记忆编辑）/ ToolApprovalBar（工具审批条）/ MeetingEndDialog
+     （结束会议对话框）/ LoginView + RegisterDialog（登录注册）/ Toast /
+     ConfirmDialog / Tooltip。
+
+32) 状态管理（Pinia stores）
+   - auth（登录态）/ chat（讨论流、气泡、本轮收尾 finishRound 清空空占位
+     气泡）/ sessions（会话列表）/ ui（界面状态）。
+
+33) 实时交互
+   - 通过 RPC（POST /api）发起动作，通过 SSE（GET /events）接收流式事件，
+     实现打字机逐字输出、工具使用常驻标签、工具审批弹窗、可打断本轮讨论。
+
+
+============================================================
+十、启动自检与基础设施（bootstrap）
+============================================================
+
+34) 启动流程（CLI 与 HTTP 服务共用）
+   - PostgreSQL 健康检查 pingDb()，失败 process.exit(1)（唯一硬退出）。
+   - 建会话/消息表、checkpoint 表、用户表 + 种子 admin。
+   - 预热 embedding 模型；初始化 5 个 agent 表并灌种子；加载 MCP 工具；
+     打印已加载的 tools / skills 清单。
+   - 配置经 zod 校验（config/settings.ts），相对路径（种子目录/模型缓存目录）
+     自动锚定到 PROJECT_ROOT；可选 LangSmith 追踪。
+
+35) 其他基础设施
+   - LLM 经 OpenAI 兼容协议调用（默认小米 MiMo），统一带 modelKwargs.thinking
+     = disabled。
+   - 中文输入防护：stdin utf8 + cleanBadChars 清孤立 UTF-16 surrogate 两道防线。
+   - 内置技能（src/skills/）：code-review、project-flow-analyzer、write-test，
+     供 skill 工具按需读取。

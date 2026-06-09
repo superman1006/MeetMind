@@ -22,11 +22,11 @@ export const NON_ARCHITECT_AGENTS = [BACKEND, FRONTEND, TESTER, PM] as const;
 export const ASSISTANT = "assistant";
 
 export const ROLE_DESCRIPTIONS: Record<string, string> = {
-  [ARCHITECT]: "架构师 (Architect / Tech Lead)",
-  [BACKEND]: "后端工程师 (Backend Engineer)",
-  [FRONTEND]: "前端工程师 (Frontend Engineer)",
-  [TESTER]: "测试工程师 (QA Engineer)",
-  [PM]: "产品经理 (Product Manager)",
+  [ARCHITECT]: "架构师",
+  [BACKEND]: "后端工程师",
+  [FRONTEND]: "前端工程师",
+  [TESTER]: "测试工程师",
+  [PM]: "产品经理",
 };
 
 /** 类型守卫：判断字符串是否是 5 个合法 agent 名（architect / backend / frontend / tester / pm）之一。 */
@@ -56,3 +56,28 @@ export const INTENT_LABELS = [
  * 兜底方向刻意偏向架构师——全功能路径是安全默认，宁可多惊动团队，也不把真需求误塞给单节点助手。
  */
 export const ASSISTANT_INTENTS: readonly string[] = ["闲聊", "知识问答"];
+
+/** 「闲聊」意图标签字面量——问候规则短路命中时直接判这个，集中成常量避免裸串（须与 INTENT_LABELS 里的一致）。 */
+export const INTENT_CHITCHAT = "闲聊";
+
+/**
+ * 问候 / 寒暄白名单：当「整句」基本就是其中一个问候语（允许带尾缀语气词、标点）时，
+ * intent_node 在跑 NLI 之前直接规则短路判为「闲聊」。
+ *
+ * 为什么要这条规则：超短问候（如「你好」）几乎没有语义信息，zero-shot NLI 输出接近均匀分布
+ * （4 标签均匀线 0.25），top-1 常因 0.0x 的噪声误命中「开发需求」，把简单打招呼塞进整个团队。
+ * 规则在分类器前拦一道，把这类输入稳定送到右侧回答助手。
+ *
+ * 刻意只做「整句精确匹配（可去尾缀语气词）」而非「包含」——「你好，帮我设计登录系统」含真实需求，
+ * 必须放给团队，不能因为开头有「你好」就误吞成闲聊。匹配细节见 intentNode.matchChitchatRule。
+ */
+export const CHITCHAT_GREETINGS: readonly string[] = [
+  "你好", "您好", "大家好", "哈喽", "哈啰", "哈罗", "嗨", "hello", "hi", "hey",
+  "在吗", "在不在", "在么", "在线吗",
+  "早", "早安", "早上好", "中午好", "下午好", "晚上好", "晚安",
+  "谢谢", "多谢", "感谢", "谢了", "辛苦了", "辛苦",
+  "再见", "拜拜", "bye",
+];
+
+/** 问候语后允许出现并被忽略的尾缀语气词（如「你好啊」「您好呀」里的啊 / 呀）。 */
+export const CHITCHAT_PARTICLES = "啊呀呢哦喔噢嘛吧吗哈呐~";

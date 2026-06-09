@@ -45,7 +45,8 @@ describe("runExecution", () => {
   beforeEach(() => {
     sseSpy = vi.spyOn(sse, "send").mockImplementation(() => {});
     appendSpy = vi.spyOn(chatStore, "appendMessages").mockResolvedValue(undefined);
-    vi.spyOn(chatStore, "getMessages").mockResolvedValue([]);
+    // runExecution 现读「喂 LLM 的上下文消息」（压缩后的读路径），不再直接读全量 getMessages。
+    vi.spyOn(chatStore, "getContextMessages").mockResolvedValue([]);
     // 本轮开始时会按会话主人加载其个人记忆;单测里打桩,避免连真库。
     vi.spyOn(chatStore, "getSessionOwner").mockResolvedValue("alice");
     vi.spyOn(userStore, "getMemory").mockResolvedValue("");
@@ -73,7 +74,7 @@ describe("runExecution", () => {
   });
 
   it("seedMessages = 已有历史 + 本轮 user 输入; 只落库新增部分", async () => {
-    vi.spyOn(chatStore, "getMessages").mockResolvedValue([archTurn("上一轮")]);
+    vi.spyOn(chatStore, "getContextMessages").mockResolvedValue([archTurn("上一轮")]);
 
     let capturedSeed: AgentResponse[] = [];
     const graph = {

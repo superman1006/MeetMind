@@ -12,6 +12,7 @@ import * as userStore from "../database/users/userStore.js";
 import * as sse from "./sseServer.js";
 import { summarizeMeeting } from "./meetingSummary.js";
 import { summarizeTitle } from "./titleSummary.js";
+import { compactSession } from "./compaction.js";
 import { getSettings, setModelOverrides, getCurrentModelConfig } from "../config/settings.js";
 
 // 一条进来的 JSON-RPC 请求的形状(和前端 rpcClient 发的一一对应)。
@@ -259,6 +260,22 @@ export async function handleRpc(graph: GraphHolder, body: RpcRequest) {
     }
     await chatStore.renameSession(sessionId, title);
     return rpcOk(id, { ok: true, title });
+  }
+
+  // chat.compact:压缩某会话上下文——把边界之前的历史滚动总结成摘要写进 sessions，
+  // 此后喂 LLM 的历史改走「摘要 + 边界后尾部」（getContextMessages）。前端在用量达阈值时触发。
+  // messages 表不动 → 前端展示历史仍是全量。讨论进行中拒绝压缩（避免与本轮落库竞态）。
+  if (body.method === "chat.compact") {
+    const sessionId = params.sessionId;
+    if (typeof sessionId !== "string" || !sessionId) {
+      return rpcError(id, -32602, "缺少 sessionId");
+    }
+    if (sessions.isBusy(sessionId)) {
+      return rpcOk(id, { compacted: false, reason: "讨论进行中,暂不压缩" });
+    }
+    // compactSession 内部已 try/catch,失败返回 {compacted:false, reason},不抛。
+    const result = await compactSession(sessionId);
+    return rpcOk(id, result);
   }
 
   // toolApproval:工具风险审批回执——前端点同意/拒绝后调，兑现后端挂起的审批 Promise。

@@ -8,7 +8,7 @@ import { BaseAgent } from "./base.js";
 export class ArchitectAgent extends BaseAgent {
   /** 构造架构师 Agent，注册名字 architect + 中文角色标签。 */
   constructor() {
-    super(ARCHITECT, "架构师（项目老大）");
+    super(ARCHITECT, "架构师");
   }
 
   /** 架构师人设：只调度不展开，按用户输入分派下属或自己一句话收尾。 */

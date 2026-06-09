@@ -1,11 +1,15 @@
 一共 6 个自定义的意图标签
- "项目技术需求",
-  "闲聊问候",
+export const INTENT_LABELS = [
+  "闲聊",
   "知识问答",
+  "开发需求",
   "任务指令",
-  "需要澄清"
-  "其他"
+] as const;
 
 
 模型使用的是
     本地的Xenova/mDeBERTa-v3-base-mnli-xnli——一个多语 NLI（Natural Language Inference，自然语言推理）模型      NLI
+
+
+
+意图识别结束后会输出指定标签的分数，根据分数看判断路由到哪个工作流

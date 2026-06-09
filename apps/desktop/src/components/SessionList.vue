@@ -177,7 +177,21 @@ async function confirmDelete(): Promise<void> {
         :title="ui.theme === 'dark' ? '切换到浅色主题' : '切换到深色主题'"
         @click="ui.toggleTheme()"
       >
-        {{ ui.theme === "dark" ? "☀️" : "🌙" }}
+        <!-- 深色态显示太阳(点了切到浅色),浅色态显示月亮(点了切到深色),线条风格与其余图标统一 -->
+        <svg v-if="ui.theme === 'dark'" class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="5" />
+          <line x1="12" y1="1" x2="12" y2="3" />
+          <line x1="12" y1="21" x2="12" y2="23" />
+          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
+          <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+          <line x1="1" y1="12" x2="3" y2="12" />
+          <line x1="21" y1="12" x2="23" y2="12" />
+          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
+          <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
+        </svg>
+        <svg v-else class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+        </svg>
       </button>
     </div>
   </aside>
@@ -185,7 +199,7 @@ async function confirmDelete(): Promise<void> {
   <!-- 展开态:header(右上角收缩按钮) + 新会话 + 列表 -->
   <aside v-else class="sidebar" :class="{ resizing: ui.sidebarResizing }" :style="{ width: ui.sidebarWidth + 'px' }">
     <div class="header">
-      <span class="title">会话</span>
+      <span class="title">MeetMind</span>
       <div class="header-actions">
         <Tooltip label="模型配置">
           <button class="toggle" aria-label="模型配置" @click="settingsOpen = true">
@@ -261,7 +275,21 @@ async function confirmDelete(): Promise<void> {
         :title="ui.theme === 'dark' ? '切换到浅色主题' : '切换到深色主题'"
         @click="ui.toggleTheme()"
       >
-        {{ ui.theme === "dark" ? "☀️" : "🌙" }}
+        <!-- 深色态显示太阳(点了切到浅色),浅色态显示月亮(点了切到深色),线条风格与其余图标统一 -->
+        <svg v-if="ui.theme === 'dark'" class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="5" />
+          <line x1="12" y1="1" x2="12" y2="3" />
+          <line x1="12" y1="21" x2="12" y2="23" />
+          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
+          <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+          <line x1="1" y1="12" x2="3" y2="12" />
+          <line x1="21" y1="12" x2="23" y2="12" />
+          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
+          <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
+        </svg>
+        <svg v-else class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+        </svg>
       </button>
     </div>
   </aside>
@@ -303,7 +331,7 @@ async function confirmDelete(): Promise<void> {
 .sidebar.resizing { transition: none; }
 .rail { width: 40px; background: var(--bg-sidebar); color: var(--text-sidebar); display: flex; flex-direction: column; align-items: center; padding: 12px 0; box-sizing: border-box; transition: width 0.18s ease; }
 .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
-.title { font-size: 14px; font-weight: 600; }
+.title { font-size: 15px; font-weight: 600; }
 .header-actions { display: flex; align-items: center; gap: 6px; }
 .toggle { display: inline-flex; align-items: center; justify-content: center; background: var(--bg-elevated); color: var(--text-sidebar); border: none; border-radius: 8px; width: 28px; height: 28px; line-height: 1; cursor: pointer; font-size: 16px; }
 .toggle:hover { filter: brightness(1.12); }
@@ -350,8 +378,9 @@ async function confirmDelete(): Promise<void> {
 /* 透明全屏背板:点菜单外部关闭。z-index 低于 popover、高于侧栏内容 */
 .menu-backdrop { position: fixed; inset: 0; z-index: 40; background: transparent; }
 /* 浅/深主题切换圆按钮 */
-.theme-toggle { width: 40px; height: 40px; border-radius: 50%; border: none; cursor: pointer; font-size: 18px; line-height: 1; background: var(--bg-elevated); color: var(--text-sidebar); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-.theme-toggle:hover { filter: brightness(1.12); }
+.theme-toggle { width: 40px; height: 40px; border-radius: 50%; border: none; cursor: pointer; background: var(--bg-elevated); color: var(--text-sidebar); display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: filter 0.15s ease, color 0.15s ease; }
+.theme-toggle .ic { width: 18px; height: 18px; }
+.theme-toggle:hover { filter: brightness(1.12); color: var(--accent); }
 /* 收缩 rail 态:底部一列(头像在上、主题切换在下),钉到 rail 底部居中 */
 .rail-footer { margin-top: auto; display: flex; flex-direction: column; align-items: center; gap: 8px; }
 .rail-avatar { width: 32px; height: 32px; border-radius: 50%; border: none; cursor: pointer; background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 700; line-height: 1; flex-shrink: 0; box-shadow: var(--shadow-card); }

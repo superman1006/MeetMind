@@ -19,6 +19,8 @@ models/
 .claude
 .cursor
 .understand-anything
+.playwright-mcp
+.codegraph
 
 # OS
 .DS_Store

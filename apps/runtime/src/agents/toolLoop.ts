@@ -22,7 +22,7 @@ import type { ToolCallRecord } from "./base.js";
 const logger = getLogger("agents.toolLoop");
 
 /** 单轮最多放任模型调几次工具，超过强制收尾，避免卡死在工具调用上。 */
-export const MAX_TOOL_ITERATIONS = 5;
+export const MAX_TOOL_ITERATIONS = 10;
 
 /** 工具循环的回调 + 透传项。callerName 仅用于日志；agentName 经 config 透传给工具区分私有表。 */
 export interface ToolLoopOptions {

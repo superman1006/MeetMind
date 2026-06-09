@@ -350,10 +350,14 @@ export function buildGraph() {
   }
 
   const compiled = graph.compile({ checkpointer: getCheckpointer() });
+  // 按执行顺序完整列出图里所有节点：预处理流水线 → 左侧团队 5 个角色 → 右侧回答助手，
+  // 与上面 addNode 的全集对齐（别只列 AGENT_NAMES，否则日志会漏掉改写 / 意图 / 分流 / 助手节点）。
   const nodeNames: string[] = [];
+  nodeNames.push("rewrite_node", "intent_node", "route_node");
   for (const n of AGENT_NAMES) {
     nodeNames.push(`${n}_node`);
   }
+  nodeNames.push(`${ASSISTANT}_node`);
   logger.info(`LangGraph compiled: ${nodeNames.join(", ")}`);
   return compiled;
 }

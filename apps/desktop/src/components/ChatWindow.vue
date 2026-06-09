@@ -46,6 +46,16 @@ const resumable = computed(() => chat.isResumable(props.sessionId));
 // 判定逻辑抽到 store 里的纯函数,便于单测;关键是靠 turnEnded 而非 text 区分「正在输出」和「轮次间隙」。
 const showThinking = computed(() => shouldShowTailThinking(busy.value, bubbles.value));
 
+// 上下文用量估算:本会话所有气泡正文的字符数累加,作为「上下文大小」的近似(粗略当 token 用)。
+// 传给 Composer 驱动圆环 + 80% 压缩触发。注意这是「展示侧」的全量大小估算,只用来做触发信号。
+const contextUsed = computed(() => {
+  let total = 0;
+  for (const b of bubbles.value) {
+    total += b.text.length;
+  }
+  return total;
+});
+
 // SSE 事件流已由 App.vue 全局订阅(单条 firehose,按 sessionId 路由),这里不再各自建连。
 
 // 打开会话时从 DB 拉历史填充气泡;讨论进行中(busy)则跳过,保留正在流式的本地气泡。
@@ -195,6 +205,21 @@ function onBlocked(): void {
   endedNotice.value = true;
 }
 
+// 上下文用量越过 80%（Composer 发 compact 事件）：请求后端压缩。
+// 后端只改 sessions 的摘要 + 边界,messages 全量不动 → 前端展示历史无需重载。失败静默忽略,不打断讨论。
+async function onCompact(): Promise<void> {
+  const sid = props.sessionId;  // 捕获当前会话 id:请求在途时用户可能切走。
+  logUserAction("请求压缩上下文", { sessionId: sid });
+  try {
+    const res = await rpc<{ compacted: boolean; reason?: string }>("chat.compact", { sessionId: sid });
+    if (res.compacted) {
+      logUserAction("上下文已压缩", { sessionId: sid });
+    }
+  } catch {
+    // 压缩失败不影响讨论,什么都不做。
+  }
+}
+
 // 用户对工具审批拍板:先乐观清掉审批条,再把决策回传 runtime(method=toolApproval)。
 async function onApprovalDecide(approved: boolean): Promise<void> {
   const p = pendingApproval.value;
@@ -243,10 +268,12 @@ async function onApprovalDecide(approved: boolean): Promise<void> {
       :busy="busy"
       :ended="ended"
       :locked="resumable && !busy && !ended"
+      :context-used="contextUsed"
       @send="onSend"
       @interrupt="onInterrupt"
       @end="onEnd"
       @blocked="onBlocked"
+      @compact="onCompact"
     />
     <MeetingEndDialog
       v-if="summary.open"

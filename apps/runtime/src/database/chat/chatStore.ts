@@ -64,6 +64,12 @@ export async function ensureChatTables(): Promise<void> {
   // 断点续跑：本会话当前在途轮次的 LangGraph thread_id（非空=有未收尾的轮，可恢复）。
   await pool.query(`ALTER TABLE ${sessions} ADD COLUMN IF NOT EXISTS pending_thread_id TEXT`);
 
+  // 上下文压缩（A 方案）：在 sessions 行上记一份「滚动摘要」+「已折进摘要的最大 seq（=压缩边界）」。
+  // 压缩只 UPDATE 这两列、不动 messages 表：messages 仍存全量供前端展示，喂 LLM 时改走「摘要 + 边界后尾部」。
+  // summary 默认空串 / 边界默认 -1（= 还没压过，等价于「全部消息都在边界之后」）。
+  await pool.query(`ALTER TABLE ${sessions} ADD COLUMN IF NOT EXISTS summary TEXT NOT NULL DEFAULT ''`);
+  await pool.query(`ALTER TABLE ${sessions} ADD COLUMN IF NOT EXISTS summarized_through_seq INT NOT NULL DEFAULT -1`);
+
   // 列表按 owner 过滤,给 owner 建索引
   const ownerIndexSql =
     `CREATE INDEX IF NOT EXISTS ${sessions}_owner_idx ` +
@@ -146,31 +152,94 @@ export async function getSessionOwner(sessionId: string): Promise<string> {
   return result.rows[0].owner ?? "";
 }
 
-/** 取某会话的全部消息，按 seq 升序。未知会话返回空数组。 */
-export async function getMessages(sessionId: string): Promise<AgentResponse[]> {
+/** 把一行 messages 记录映射成 AgentResponse（getMessages / getMessagesAfterSeq 共用）。 */
+function mapRowToResponse(row: Record<string, unknown>): AgentResponse {
+  // tool_calls 列是 jsonb，pg 驱动已自动 parse 成数组；旧行/空值兜底为空数组
+  const toolCalls = Array.isArray(row.tool_calls) ? row.tool_calls : [];
+  return {
+    agent_name: row.agent_name as string,
+    role: row.role as string,
+    message: row.message as string,
+    next_agent: (row.next_agent as string | null) ?? null,
+    done: row.done as boolean,
+    used_rag: row.used_rag as boolean,
+    tool: (row.tool as string) ?? "",
+    tool_calls: toolCalls,
+    created_at: String(row.created_at),
+  };
+}
+
+/** 取某会话中 seq 大于 afterSeq 的消息，按 seq 升序。afterSeq=-1 即全部。 */
+export async function getMessagesAfterSeq(sessionId: string, afterSeq: number): Promise<AgentResponse[]> {
   const pool = getPgPool();
   const selectSql =
     `SELECT agent_name, role, message, next_agent, done, used_rag, tool, tool_calls, created_at ` +
-    `FROM ${messagesTable()} WHERE session_id = $1 ORDER BY seq ASC`;
-  // 执行查询消息的 SQL 语句
-  const result = await pool.query(selectSql, [sessionId]);
+    `FROM ${messagesTable()} WHERE session_id = $1 AND seq > $2 ORDER BY seq ASC`;
+  const result = await pool.query(selectSql, [sessionId, afterSeq]);
   const turns: AgentResponse[] = [];
   for (const row of result.rows) {
-    // 将tool_calls 列是 jsonb，pg 驱动已自动 parse 成数组；旧行/空值兜底为空数组
-    const toolCalls = Array.isArray(row.tool_calls) ? row.tool_calls : [];
-    turns.push({
-      agent_name: row.agent_name,
-      role: row.role,
-      message: row.message,
-      next_agent: row.next_agent,
-      done: row.done,
-      used_rag: row.used_rag,
-      tool: row.tool ?? "",
-      tool_calls: toolCalls,
-      created_at: String(row.created_at),
-    });
+    turns.push(mapRowToResponse(row));
   }
   return turns;
+}
+
+/** 取某会话的全部消息，按 seq 升序。未知会话返回空数组。前端展示历史走这条（永远全量，不受压缩影响）。 */
+export async function getMessages(sessionId: string): Promise<AgentResponse[]> {
+  return getMessagesAfterSeq(sessionId, -1);
+}
+
+/** 合成摘要 turn 的 agent_name / role（formatHistory 会渲染成 "--- system (历史摘要) ---"）。 */
+const SUMMARY_AGENT_NAME = "system";
+const SUMMARY_ROLE = "历史摘要";
+
+/** 某会话当前的压缩状态：滚动摘要文本 + 已折进摘要的最大 seq（边界）。未压过 → {summary:"", throughSeq:-1}。 */
+export async function getCompactionState(sessionId: string): Promise<{ summary: string; throughSeq: number }> {
+  const pool = getPgPool();
+  const selectSql = `SELECT summary, summarized_through_seq FROM ${sessionsTable()} WHERE id = $1`;
+  const result = await pool.query(selectSql, [sessionId]);
+  const row = result.rows[0];
+  if (!row) {
+    return { summary: "", throughSeq: -1 };
+  }
+  return { summary: row.summary ?? "", throughSeq: row.summarized_through_seq ?? -1 };
+}
+
+/** 写入/更新某会话的压缩状态：摘要文本 + 新边界 seq。压缩动作只 UPDATE 这两列，messages 表一行不动。 */
+export async function setCompaction(sessionId: string, summary: string, throughSeq: number): Promise<void> {
+  const pool = getPgPool();
+  const updateSql =
+    `UPDATE ${sessionsTable()} SET summary = $2, summarized_through_seq = $3 WHERE id = $1`;
+  await pool.query(updateSql, [sessionId, summary, throughSeq]);
+}
+
+/** 取某会话当前最大 seq（空会话返回 -1）。压缩时用来定边界、判断有没有新消息可压。 */
+export async function getMaxSeq(sessionId: string): Promise<number> {
+  const pool = getPgPool();
+  const maxSql = `SELECT coalesce(max(seq), -1) AS max_seq FROM ${messagesTable()} WHERE session_id = $1`;
+  const result = await pool.query(maxSql, [sessionId]);
+  return result.rows[0]?.max_seq ?? -1;
+}
+
+/**
+ * 取「喂给 LLM 的上下文消息」：摘要(合成一条) + 边界之后的尾部消息。
+ * 还没压缩过(summary 为空)时退化为全量 getMessages，与压缩前行为一致。
+ * 注意：这条只供 runExecution 拼 LLM 历史用；前端展示历史仍走 getMessages（全量）。
+ */
+export async function getContextMessages(sessionId: string): Promise<AgentResponse[]> {
+  const state = await getCompactionState(sessionId);
+  const tail = await getMessagesAfterSeq(sessionId, state.throughSeq);
+  if (!state.summary) {
+    return tail;
+  }
+  const summaryTurn: AgentResponse = {
+    agent_name: SUMMARY_AGENT_NAME,
+    role: SUMMARY_ROLE,
+    message: `【以下是更早讨论的压缩摘要，请据此理解上文】\n${state.summary}`,
+    next_agent: null,
+    done: false,
+    used_rag: false,
+  };
+  return [summaryTurn, ...tail];
 }
 
 /** 把本轮新增的若干 turn 追加进某会话，seq 接着已有最大值往后排。 */
