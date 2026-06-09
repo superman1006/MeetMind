@@ -4,11 +4,24 @@
 
 ### 多 Agent RAG 协作系统 · Multi-Agent RAG Collaboration
 
+**简体中文** ｜ [English](README.en.md)
+
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![LangGraph](https://img.shields.io/badge/LangChain%20%2F%20LangGraph-1C3C3C?style=flat-square&logo=langchain&logoColor=white)](https://langchain-ai.github.io/langgraphjs/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?style=flat-square&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 [![pgvector](https://img.shields.io/badge/pgvector-008BB9?style=flat-square)](https://github.com/pgvector/pgvector)
 [![Transformers.js](https://img.shields.io/badge/Transformers.js-FFD21E?style=flat-square&logo=huggingface&logoColor=black)](https://huggingface.co/docs/transformers.js)
+
+[![Quick Start](https://img.shields.io/badge/🚀_Quick_Start-00C853?style=for-the-badge&logoColor=white)](#快速开始)
+[![License MIT](https://img.shields.io/badge/License-MIT-555555?style=for-the-badge)](LICENSE)
+<br/>
+[![Claude Code](https://img.shields.io/badge/Claude_Code-D97757?style=for-the-badge&logo=anthropic&logoColor=white)](https://claude.com/claude-code)
+[![Codex](https://img.shields.io/badge/Codex-000000?style=for-the-badge&logo=openai&logoColor=white)](https://openai.com/codex/)
+[![Gemini CLI](https://img.shields.io/badge/Gemini_CLI-4285F4?style=for-the-badge&logo=googlegemini&logoColor=white)](https://github.com/google-gemini/gemini-cli)
+[![Cursor](https://img.shields.io/badge/Cursor-000000?style=for-the-badge&logo=cursor&logoColor=white)](https://cursor.com/)
+[![Trae](https://img.shields.io/badge/Trae-FF3B30?style=for-the-badge&logoColor=white)](https://trae.ai/)
+
+> 本项目可配合 **Claude Code / Codex / Gemini CLI / Cursor / Trae** 等 AI 编程助手进行二次开发与协作。
 
 </div>
 
