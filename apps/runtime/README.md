@@ -35,7 +35,7 @@ pnpm typecheck          # tsc --noEmit
 pnpm test               # vitest run
 ```
 
-> ⚠️ **runtime 用 `tsx` 启动、不 watch**：改了服务端代码（尤其 `server/rpc.ts` 新增 method、或工具/MCP）后必须**重启 runtime 进程**，否则前端调新 method 会收到「未知方法: xxx」。前端 vite 有 HMR 不用重启。
+> ⚠️ **runtime 用 `tsx` 启动、不 watch**：改了服务端代码（尤其 `server/rpcServer.ts` 新增 method、或工具/MCP）后必须**重启 runtime 进程**，否则前端调新 method 会收到「未知方法: xxx」。前端 vite 有 HMR 不用重启。
 
 启动时（`bootstrap()`）：ping PostgreSQL（失败 `process.exit(1)`，唯一硬退出）→ 建会话/消息表 → 预热 embedding 模型（首次 ~80MB）→ 灌种子到各 agent 表（`ON CONFLICT` 幂等）→ 加载 MCP 工具（连得上才有，连不上只 log、不挂启动）。
 
@@ -48,17 +48,26 @@ index.ts (load .env) → bootstrap() → buildGraph() → startServer(graph, 300
                                                           │
    POST /api ─ handleRpc ─ chat.send ─► runExecution(graph, …) ─ graph.stream(["custom","values"])
                                                           │
+   START → rewrite_node → intent_node → route_node ──┬─► assistant_node → END      （右侧回答助手）
+                                                     └─► architect_node → … 团队   （左侧 5 角色协作）
+                                                          │
                        createNode(agent) 闭包 ─► agent.invoke()  ── writer ──► SSE 事件
                             （Phase1 工具循环 + Phase2 结构化收尾）
                                                           ▼
                                  routeToWhichAgent(state) → 下一个 _node 或 END
 ```
 
+**预处理流水线**（每轮入口跑一次，不计入 `iteration`）：`rewrite_node`（改写独立句 + 检索扩展词）→ `intent_node`（本地 NLI 意图识别 + 规则短路：问候→闲聊、开发关键词→开发需求）→ `route_node`（按 top-1/top-2 **间距** `INTENT_ROUTE_MARGIN` 分流：闲聊/知识问答→右侧助手，其余→左侧团队，判定不了默认走助手）。
+
 `BaseAgent.invoke()` **分两阶段**：
-1. **Phase 1 工具循环**：复用构造阶段已 `bindTools(allTools)` 的模型，LLM 自主调工具，最多 3 轮。每次工具执行后把 `{name, args, result}` 收集进 `tool_calls`，并实时回调 `onToolResult`。
+1. **Phase 1 工具循环**：复用构造阶段已 `bindTools(allTools)` 的模型，LLM 自主调工具，最多 3 轮（实现在 `agents/toolLoop.ts`）。每次工具执行后把 `{name, args, result}` 收集进 `tool_calls`，并实时回调 `onToolResult`；`risk > low` 的工具执行前先发 `tool_approval_request` 等用户审批（HITL）；模型幻觉出的未知工具会被跳过、只回一条占位 ToolMessage。
 2. **Phase 2 结构化收尾**：`withStructuredOutput(ModelOutputSchema)` 强制产出 `{content, next_agent, done}`。
 
+> **右侧回答助手** `AssistantAgent.answer()`：复用同一套工具循环，但 Phase 2 改成纯自然语言流式收尾（不结构化、不填 `next_agent`），答完直接 → END，与左侧团队仅共享 `AgentState`、不碰 `iteration`。
+
 路由 `routeToWhichAgent`：`iteration ≥ maxIterations → END`；`done → END`；`next_agent ∈ AGENT_NAMES → 对应节点`；兜底回 architect。
+
+> **崩溃恢复**：图 `compile({ checkpointer: PostgresSaver })`，被打断的一轮留下 checkpoint；重开会话时 `chat.getResumable` 探测、`chat.resume` 续跑（`resumeExecution`）、`chat.discardResumable` 放弃并删 checkpoint。
 
 ---
 
@@ -78,14 +87,24 @@ query ──┬─► pg_trgm 关键字召回 (word_similarity)  ──┐
 
 每个本地工具是一个 `<xxx>Tool.ts` 导出的 LangChain `tool()` 单例，集中在 [`toolRegister.ts`](src/tools/toolRegister.ts) 同步登记进 `allTools`；MCP 工具在 bootstrap 阶段**异步**追加进同一个数组。新增本地工具 = 新建一个文件 + 在 `toolRegister.ts` 加一行 import + 一行 `register`。
 
-| 工具名 | 文件 | 作用 |
-|---|---|---|
-| `rag_search` | `ragSearchTool.ts` | 私有 RAG，按调用时 `config.configurable.agentName` 查对应 agent 的私有表 |
-| `echo` | `echoTool.ts` | 命令行 `echo` 回显文本（`execFile`，不过 shell，无注入） |
-| `list_processes` | `processTool.ts` | `ps aux` 看进程，可选 `filter` 关键字 |
-| `list_dir` | `listDirTool.ts` | 列目录（`fs.readdir`，标注 dir/file） |
-| `read_file` | `readFileTool.ts` | 读文件文本（`fs.readFile`，超 2 万字符截断） |
-| `AIsearch` | `mcp/mcpClient.ts` | 联网搜索，经 `MultiServerMCPClient` 接入百度 AI Search MCP（上游原名 `AIsearch`） |
+每个工具带一个 `metadata.risk`（`low` / `medium` / `high`）：`> low` 的工具执行前会触发 HITL 审批（发 `tool_approval_request`，等 `toolApproval` 回执）。
+
+| 工具名 | 文件 | risk | 作用 |
+|---|---|---|---|
+| `rag_search` | `ragSearchTool.ts` | low | 私有 RAG，按调用时 `config.configurable.agentName` 查对应 agent 的私有表（拼 `expansionTerms` 提召回） |
+| `Read` | `readFileTool.ts` | low | 读文件文本（`fs.readFile`，超 2 万字符截断） |
+| `list_dir` | `listDirTool.ts` | low | 列目录（`fs.readdir`，标注 dir/file） |
+| `glob` | `globTool.ts` | low | 按 glob 模式匹配文件路径 |
+| `grep` | `grepTool.ts` | low | 在文件内容里按正则搜索 |
+| `echo` | `echoTool.ts` | low | 命令行 `echo` 回显文本（`execFile`，不过 shell，无注入） |
+| `list_processes` | `processTool.ts` | low | `ps aux` 看进程，可选 `filter` 关键字 |
+| `skill` | `skillTool.ts` | low | 列举 / 读取 `src/skills/<name>/SKILL.md` 技能说明 |
+| `Edit` | `fileEditTool.ts` | **medium** | 对文件做精确字符串替换（落盘改文件） |
+| `web_fetch` | `webFetchTool.ts` | **medium** | 抓取 URL 正文 |
+| `Write` | `writeFileTool.ts` | **high** | 写 / 覆盖文件（副作用最强，默认必经审批） |
+| `AIsearch` | `mcp/mcpClient.ts` | — | 联网搜索，经 `MultiServerMCPClient` 接入百度 AI Search MCP（上游原名 `AIsearch`） |
+
+> 文件类工具（`Read` / `Edit` / `Write` / `glob` / `grep` / `list_dir`）经 `pathAuth.ts` 做路径授权与越界防护。
 
 ### MCP 接入 `src/tools/mcp/mcpClient.ts`
 
@@ -109,14 +128,20 @@ query ──┬─► pg_trgm 关键字召回 (word_similarity)  ──┐
 
 ## HTTP / SSE 接口（端口 3002）
 
-**`POST /api`（JSON-RPC）**：
+**`POST /api`（JSON-RPC，由 `server/rpcServer.ts` 的 `handleRpc` 分诊）**：
 
 | method | 作用 |
 |---|---|
 | `chat.send` | 开一轮讨论（后台跑、立即返回 `{ok:true}`，过程走 SSE） |
 | `chat.interrupt` | 打断本轮（abort，丢弃不落库） |
+| `chat.summaryTitle` | 用新会话首条输入生成 ≤15 字标题（与 `chat.send` 并行、独立 LLM 调用） |
+| `chat.compact` | 上下文压缩：把边界前历史滚动总结成摘要写进 `sessions`，此后喂 LLM 走「摘要 + 尾部」 |
+| `chat.getResumable` / `chat.resume` / `chat.discardResumable` | 崩溃残留的未完成轮：探测可恢复 / 从 checkpoint 续跑 / 放弃并删 checkpoint |
 | `chat.end` | 结束会议 → 后台整理会议纪要写 `data/summary/<id>.md` |
-| `session.create` / `session.list` / `session.messages` / `session.rename` / `session.delete` | 会话 CRUD |
+| `session.create` / `session.list` / `session.messages` / `session.rename` / `session.delete` | 会话 CRUD（`create` / `list` 按 `username` 隔离） |
+| `user.login` / `user.registry` / `user.getMemory` / `user.setMemory` | 账号鉴权 + 个人记忆读写（记忆经 `memorySection` 注入各 agent system prompt） |
+| `toolApproval` | HITL 工具审批回执，兑现后端挂起的审批 Promise（`server/toolApprovals.ts`） |
+| `model.get` / `model.set` / `model.test` | 读 / 热切换 LLM 配置（`set` 会 `buildGraph()` 重建图）/ 探连通性 |
 
 **`GET /events?sessionId=…`（SSE）**：
 
@@ -125,13 +150,14 @@ query ──┬─► pg_trgm 关键字召回 (word_similarity)  ──┐
 | `turn_start` | 某 agent 开始发言 | `{ turnId, agent_name, role }` |
 | `delta` | Phase 2 流式吐字 | `{ turnId, text }` |
 | `using_tools` | 工具执行前 | `{ turnId, tool }` |
+| `tool_approval_request` | 高风险工具执行前（HITL） | `{ turnId, approvalId, tool, risk, args }` |
 | `tool_result` | 工具执行后 | `{ turnId, name, args, result }` |
 | `turn_end` | 某 agent 结束 | `{ turnId, next_agent, done, used_rag }` |
 | `round_done` | 一轮结束 | `{ done }` / `{ done:false, interrupted:true }` |
 | `error` | 讨论异常 | `{ message }` |
 | `summary_done` / `summary_error` | 纪要完成 / 失败 | `{ file }` / `{ message }` |
 
-会话与消息持久化在 PostgreSQL（`<prefix>_sessions` / `<prefix>_messages`）；运行时状态（busy + AbortController）在内存、重启即重置。
+会话 / 消息 / 用户 / 个人记忆持久化在 PostgreSQL（`<prefix>_sessions` / `<prefix>_messages` / `<prefix>_users`），LangGraph checkpoint 在自管的 `checkpoint*` 表；运行时状态（busy + AbortController + 挂起的工具审批）在内存、重启即重置。
 
 ---
 
@@ -143,38 +169,58 @@ src/
 ├── bootstrap.ts            # 启动自检 + 灌库 + 加载 MCP 工具
 ├── cli/main.ts             # 旧交互式 CLI（非流式，保留）
 ├── agents/
-│   ├── base.ts             # BaseAgent 抽象类：两阶段 invoke + ToolCallRecord/AgentResponse + summarizeAll
+│   ├── base.ts             # BaseAgent 抽象类：两阶段 invoke + ToolCallRecord/AgentResponse + memorySection + summarizeAll
+│   ├── toolLoop.ts         # Phase 1 工具循环（runToolLoop）：执行工具 / HITL 审批 / 跳过未知工具，base 与 assistant 共用
+│   ├── assistant.ts        # AssistantAgent：右侧回答助手 answer()（工具循环 + 纯文本流式收尾，不结构化）
 │   ├── architect|backend|frontend|tester|pm.ts   # 5 个角色子类（只重写 systemPrompt）
 │   └── streamStructured.ts # 流式结构化输出逐段吐 content
 ├── graph/
-│   ├── builder.ts          # buildGraph / buildAllAgents / createNode 节点工厂
-│   ├── route.ts            # routeToWhichAgent 条件边
+│   ├── builder.ts          # buildGraph / buildAllAgents / createNode / createAssistantNode 节点工厂
+│   ├── preprocess/
+│   │   ├── rewriteNode.ts  # rewrite_node：改写独立句 + 检索扩展词（withStructuredOutput）
+│   │   ├── intentNode.ts   # intent_node：本地 NLI 意图识别 + 问候/开发关键词规则短路
+│   │   └── routeNode.ts    # route_node：按 top-1/top-2 间距分流 chat / team
+│   ├── route.ts            # routeAfterPreprocess（分流条件边）+ routeToWhichAgent（agent 间条件边）
+│   ├── checkpointer.ts     # PostgresSaver 单例 + deleteThreadCheckpoints（崩溃恢复）
 │   ├── state.ts            # AgentStateAnnotation（Annotation.Root）
 │   └── streamEvents.ts     # NodeStreamChunk（节点自定义流事件类型）
 ├── database/
-│   ├── client.ts           # pg.Pool 单例 + 建表/扩展/索引
-│   ├── embedding.ts        # 本地 ONNX embedding
-│   ├── reranker.ts         # 本地 cross-encoder rerank（含降级）
-│   ├── rag_retriever.ts    # 关键字 + 向量并行召回 → 去重 → rerank；getRetriever(name) 缓存
-│   ├── initializer.ts      # buildAgentsTables / loadSeedsToPg / resetAgentDb（幂等灌库）
-│   ├── loaders.ts          # JSON/MD/PDF/DOCX/TXT 五种 loader
-│   ├── splitters.ts        # 按 type 切块
-│   ├── chatStore.ts        # sessions / messages 持久化（含 tool_calls jsonb 列）
-│   └── constants.ts        # 表名 <prefix>_<agent>
+│   ├── index.ts            # 汇总导出
+│   ├── connection/
+│   │   ├── client.ts       # pg.Pool 单例 + pingDb + 建表/扩展/索引
+│   │   └── constants.ts    # 表名 <prefix>_<agent>
+│   ├── models/
+│   │   ├── embedding.ts    # 本地 ONNX embedding
+│   │   ├── reranker.ts     # 本地 cross-encoder rerank（含降级）
+│   │   └── intentClassifier.ts  # 本地 zero-shot NLI 意图分类（懒加载单例）
+│   ├── retrieval/
+│   │   └── rag_retriever.ts # 关键字 + 向量并行召回 → 去重 → rerank；getRetriever(name) 缓存
+│   ├── ingestion/
+│   │   ├── initializer.ts  # buildAgentsTables / loadSeedsToPg / resetAgentDb（幂等灌库）
+│   │   ├── loaders.ts      # JSON/MD/PDF/DOCX/TXT 五种 loader
+│   │   └── splitters.ts    # 按 type 切块
+│   ├── chat/chatStore.ts   # sessions / messages 持久化（含 tool_calls jsonb、上下文压缩摘要列）
+│   └── users/userStore.ts  # users 表：账号鉴权 + 个人记忆读写
 ├── tools/
 │   ├── toolRegister.ts     # ToolRegister 类 + 单例 + 本地工具登记 + allTools
-│   ├── ragSearchTool.ts / echoTool.ts / processTool.ts / listDirTool.ts / readFileTool.ts
+│   ├── ragSearchTool.ts / readFileTool.ts / listDirTool.ts / globTool.ts / grepTool.ts
+│   ├── echoTool.ts / processTool.ts / fileEditTool.ts / writeFileTool.ts / webFetchTool.ts / skillTool.ts
+│   ├── pathAuth.ts         # 文件类工具的路径授权 / 越界防护
 │   └── mcp/mcpClient.ts    # MultiServerMCPClient 接入 + JSON-Schema→zod shim
 ├── server/
 │   ├── httpServer.ts       # POST /api + GET /events
-│   ├── rpc.ts              # handleRpc 按 method 分诊
-│   ├── runExecution.ts    # 跑一轮讨论，graph.stream → SSE，增量落库
-│   ├── sse.ts              # SSE 长连登记表 + send()
+│   ├── rpcServer.ts        # handleRpc 按 method 分诊（chat.* / session.* / user.* / model.* / toolApproval）
+│   ├── runExecution.ts     # 跑 / 续跑一轮讨论，graph.stream → SSE，增量落库
+│   ├── sseServer.ts        # SSE 长连登记表 + send()
 │   ├── sessions.ts         # 会话运行时状态（busy + AbortController，内存）
+│   ├── toolApprovals.ts    # HITL 工具审批：挂起 Promise + createPending/resolve
+│   ├── compaction.ts       # 上下文压缩：滚动总结较早历史
+│   ├── titleSummary.ts     # 会话自动命名（首条输入 → 短标题）
 │   └── meetingSummary.ts   # 会议结束整理
 ├── config/
-│   ├── settings.ts         # zod Settings 单例（读 .env + 相对路径锚定 PROJECT_ROOT）
-│   └── constants.ts        # AGENT_NAMES / 角色常量 / isAgentName
+│   ├── settings.ts         # zod Settings 单例（读 .env + 相对路径锚定）+ 模型热切换覆盖
+│   └── constants.ts        # AGENT_NAMES / ASSISTANT / INTENT_LABELS / 规则白名单 / isAgentName
+├── skills/                 # skill 工具读取的 <name>/SKILL.md
 └── utils/                  # logger / utils（printAgentInfo / cleanBadChars 等）
 ```
 
@@ -186,7 +232,7 @@ src/
 
 ```bash
 # 重置某个 agent 的表并重灌
-pnpm exec tsx -e "import('./src/database/initializer.ts').then(m => m.resetAgentDb('backend'))"
+pnpm exec tsx -e "import('./src/database/ingestion/initializer.ts').then(m => m.resetAgentDb('backend'))"
 
 # 完全抹库重灌（删 docker volume，下次启动重建）
 docker compose down -v && docker compose up -d   # 在仓库根

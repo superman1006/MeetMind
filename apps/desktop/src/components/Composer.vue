@@ -133,44 +133,6 @@ function onKeydown(e: KeyboardEvent): void {
         :placeholder="locked ? '请先在上方选择「继续」或「放弃」未完成的上一轮' : '输入项目需求… (Enter 发送, Shift+Enter 换行)'"
         @keydown="onKeydown"
       ></textarea>
-      <!-- 上下文用量圆环:坐落输入坞右下角,点击在其正上方浮出用量卡 -->
-      <div class="context-meter">
-        <button
-          type="button"
-          class="meter-btn"
-          :title="`上下文用量 ${usedLabel} / ${maxLabel} (${percent}%)`"
-          @click="toggleMeter"
-        >
-          <svg class="ring" viewBox="0 0 32 32" width="30" height="30" aria-hidden="true">
-            <circle class="ring-track" cx="16" cy="16" :r="ring.radius" fill="none" :stroke-width="ring.stroke" />
-            <circle
-              class="ring-progress"
-              cx="16"
-              cy="16"
-              :r="ring.radius"
-              fill="none"
-              :stroke-width="ring.stroke"
-              stroke-linecap="round"
-              :stroke-dasharray="circumference"
-              :stroke-dashoffset="dashOffset"
-            />
-          </svg>
-        </button>
-        <div v-if="showMeter" class="meter-backdrop" @click="showMeter = false"></div>
-        <div v-if="showMeter" class="meter-popover">
-          <div class="meter-row">
-            <div class="meter-info">
-              <span class="meter-label">Context window</span>
-              <span class="meter-value">{{ usedLabel }} / {{ maxLabel }} ({{ percent }}%)</span>
-            </div>
-            <!-- 右侧手动压缩按钮:按下即压,不做阈值判断 -->
-            <button type="button" class="compact-btn" title="压缩上下文" @click="onCompactClick">压缩</button>
-          </div>
-          <div class="meter-bar">
-            <div class="meter-bar-fill" :style="{ width: percent + '%' }"></div>
-          </div>
-        </div>
-      </div>
       <div class="actions">
         <button
           :class="{ stop: busy }"
@@ -191,13 +153,53 @@ function onKeydown(e: KeyboardEvent): void {
         </button>
       </div>
     </div>
+    <!-- 上下文用量圆环:浮在输入坞外的右上角(结束按钮上方一点),独立于输入坞,点击不会触发输入框光环;点击在其上方浮出用量卡 -->
+    <div class="context-meter">
+      <button
+        type="button"
+        class="meter-btn"
+        :title="`上下文用量 ${usedLabel} / ${maxLabel} (${percent}%)`"
+        @click="toggleMeter"
+      >
+        <svg class="ring" viewBox="0 0 32 32" width="30" height="30" aria-hidden="true">
+          <circle class="ring-track" cx="16" cy="16" :r="ring.radius" fill="none" :stroke-width="ring.stroke" />
+          <circle
+            class="ring-progress"
+            cx="16"
+            cy="16"
+            :r="ring.radius"
+            fill="none"
+            :stroke-width="ring.stroke"
+            stroke-linecap="round"
+            :stroke-dasharray="circumference"
+            :stroke-dashoffset="dashOffset"
+          />
+        </svg>
+      </button>
+      <div v-if="showMeter" class="meter-backdrop" @click="showMeter = false"></div>
+      <div v-if="showMeter" class="meter-popover">
+        <div class="meter-row">
+          <div class="meter-info">
+            <span class="meter-label">Context window</span>
+            <span class="meter-value">{{ usedLabel }} / {{ maxLabel }} ({{ percent }}%)</span>
+          </div>
+          <!-- 右侧手动压缩按钮:按下即压,不做阈值判断 -->
+          <button type="button" class="compact-btn" title="压缩上下文" @click="onCompactClick">压缩</button>
+        </div>
+        <div class="meter-bar">
+          <div class="meter-bar-fill" :style="{ width: percent + '%' }"></div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <style scoped>
 /* composer 作用域内的光环 token(紫色),与全局 indigo 强调色同调 */
 .composer {
-  padding: 14px 16px 18px;
+  position: relative;              /* 作上方圆环的定位锚点 */
+  /* 顶部留出空间,容纳浮在输入坞上方的用量圆环 */
+  padding: 46px 16px 18px;
   /* 与上方滚动区同色、且不画上边框:输入坞所在区与聊天区连成一整片同色背景,
      既没有分隔线、也没有「白板/暗带」色差,输入卡直接浮在聊天背景之上 */
   background: var(--bg-chat);
@@ -206,6 +208,7 @@ function onKeydown(e: KeyboardEvent): void {
 
 /* 输入坞外壳:一张承载输入框 + 按钮的圆角卡,聚焦时整卡描金边 + 外发光 */
 .composer-shell {
+  position: relative;            /* 作上方圆环的定位锚点 */
   display: flex;
   align-items: stretch;
   gap: 8px;
@@ -295,10 +298,11 @@ button.end:not(:disabled):hover { color: var(--text-main); border-color: var(--t
 button:disabled { opacity: 0.45; cursor: not-allowed; box-shadow: none; }
 
 /* ── 上下文用量圆环 + 悬浮卡 ──────────────────────────────── */
-/* 容器贴坞底(右下角),作为悬浮卡的定位锚点 */
+/* 圆环浮在输入坞外的右上角(结束按钮上方一点),独立于输入坞;同时仍是悬浮卡的定位锚点 */
 .context-meter {
-  position: relative;
-  align-self: flex-end;
+  position: absolute;
+  top: 4px;                     /* 落在坞顶上方的留白里 */
+  right: 24px;                  /* 右缘对齐结束按钮一侧(坞 padding 8 + composer padding 16) */
   display: flex;
   align-items: center;
 }
@@ -328,14 +332,15 @@ button:disabled { opacity: 0.45; cursor: not-allowed; box-shadow: none; }
 
 /* 遮罩:铺满视口接住点击,点一下关卡;透明、不挡视觉 */
 .meter-backdrop { position: fixed; inset: 0; z-index: 10; }
-/* 悬浮卡:浮在圆环正上方,右缘对齐圆环 */
+/* 悬浮卡:浮在圆环上方,右缘对齐圆环(圆环贴右,居中会溢出屏幕,故改右对齐往左展开) */
 .meter-popover {
   position: absolute;
-  bottom: calc(100% + 8px);
+  bottom: calc(100% + 16px);
+  /* 右缘对齐圆环,卡片整体向左展开,避免右侧被裁切 */
   right: 0;
   z-index: 20;
-  width: 240px;
-  padding: 10px 12px;
+  width: 340px;
+  padding: 6px 14px;
   border-radius: 12px;
   background: var(--bg-elevated);
   border: 1px solid rgba(var(--glow), 0.35);
@@ -353,10 +358,10 @@ button:disabled { opacity: 0.45; cursor: not-allowed; box-shadow: none; }
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 8px;
+  margin-bottom: 4px;
 }
-/* 左侧信息组:标题在上、数值在下 */
-.meter-info { display: flex; flex-direction: column; gap: 2px; }
+/* 左侧信息组:标题与数值同一行 */
+.meter-info { display: flex; flex-direction: row; align-items: baseline; gap: 8px; }
 .meter-label { font-size: 12px; color: var(--text-dim); }
 .meter-value {
   font-size: 12px;

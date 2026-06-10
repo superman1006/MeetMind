@@ -5,6 +5,14 @@
 >
 > 本文只做设计与复杂度评估，**不含实现**。
 
+> **✅ 实现状态（已落地）**：故障 B（进程崩 / 重启）已按下文方案实现——图 `compile({ checkpointer: PostgresSaver })`
+> （[graph/checkpointer.ts](../apps/runtime/src/graph/checkpointer.ts)），`runExecution` 每轮带 `thread_id` 跑、
+> 用 `sessions.pending_thread_id` 记在途轮（[chatStore](../apps/runtime/src/database/chat/chatStore.ts)），
+> 经 `chat.getResumable` / `chat.resume`（`resumeExecution` 传 `null` 从断点续）/ `chat.discardResumable` 三个 RPC
+> 暴露给前端（[rpcServer.ts](../apps/runtime/src/server/rpcServer.ts) / [runExecution.ts](../apps/runtime/src/server/runExecution.ts)）。
+> **与下文设计的唯一偏差**：`thread_id` 用 `${sessionId}:${roundId}`（每轮一个、随机 UUID），而非设计里写的 `thread_id = sessionId`——
+> 这样每轮独立存档、正常收尾即 `deleteThreadCheckpoints` 清掉，只有崩溃残留才被 `getResumable` 探到。
+
 ---
 
 ## 0. 结论先行（TL;DR）

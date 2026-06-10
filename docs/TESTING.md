@@ -61,30 +61,38 @@ pnpm --filter @meetmind/runtime exec vitest      # watch 模式调试
 
 ## 已覆盖模块
 
-### Runtime(`apps/runtime`,88 例 / 14 文件)
+### Runtime(`apps/runtime`,157 例 / 23 文件)
 
 | 模块 | 测了什么 |
 |---|---|
 | `graph/route` | `routeToWhichAgent` 四优先级(迭代上限 > done > 合法 next > 兜底架构师) |
+| `graph/preprocess`(`intentNode` / `routePreprocess`) | 意图规则短路(问候→闲聊 / 开发关键词→开发需求)、`intent_margin` 计算、`route_node` 按间距分流 chat/team |
+| `graph/checkpointer` | `PostgresSaver` 单例 + `deleteThreadCheckpoints`(mock pg) |
 | `utils/utils` | `cleanBadChars`(孤立代理对清理)/ `formatSeparator` / `pathExists` / `colorize` / CLI 打印冒烟 |
 | `config/constants` | `isAgentName` / `AGENT_NAMES` / `ROLE_DESCRIPTIONS` |
-| `config/settings` | `getSettings` 单例与默认值 / `resolveRel` 路径锚定 / `settingFieldNames` |
-| `database/constants` | `getTableName` 表名拼装 |
-| `database/splitters` | `splitJson` 透传 / `splitText`·`splitMarkdown` 切块 / `splitDocs` 按类型分发与兜底 |
-| `database/chatStore` | 全部增删改查 + `seq` 递增 + `ended` 持久化(mock pg) |
-| `server/rpc` | JSON-RPC 总机各 method(已有,含 `chat.end`/`chat.send` 的 ended 守卫) |
-| `server/{sessions,sse,runExecution,meetingSummary}`、`agents/streamStructured` | 已有 |
+| `config/settings` | `getSettings` 单例与默认值 / `resolveRel` 路径锚定 / 模型热切换覆盖 |
+| `agents/{coerceDone,streamStructured}` | `done` 强转真值表 / 流式结构化输出逐段吐字 |
+| `database/connection/constants` | `getTableName` 表名拼装 |
+| `database/ingestion/splitters` | `splitJson` 透传 / `splitText`·`splitMarkdown` 切块 / `splitDocs` 按类型分发与兜底 |
+| `database/chat/chatStore` | 全部增删改查 + `seq` 递增 + `ended`/owner/压缩/在途 thread 持久化(mock pg) |
+| `database/users/userStore` | 账号鉴权 + 个人记忆读写(mock pg) |
+| `server/rpcServer` | JSON-RPC 总机各 method(chat.*/session.*/user.*/model.*/toolApproval,含 ended 守卫) |
+| `server/toolApprovals` | HITL 审批挂起 Promise 的 createPending / resolve |
+| `server/{sessions,sseServer,runExecution,meetingSummary,titleSummary}` | 已有 |
+| `tools/{mcp/mcpClient,webFetchTool}` | MCP 适配 shim / web_fetch |
 
-### Desktop(`apps/desktop`,33 例 / 6 文件)
+### Desktop(`apps/desktop`,75 例 / 9 文件)
 
 | 模块 | 测了什么 |
 |---|---|
 | `stores/chat` | 气泡收发 / `useTool` 去重 / `finishRound` 弹空泡 / `load` / `markEnded`·`hydrateEnded` / `drop` |
 | `stores/sessions` | `load`/`newSession`/`rename`/`remove`(mock rpc) |
+| `stores/auth` | 登录 / 注册 / 登出 + 持久化(mock rpc) |
 | `stores/ui` | 收缩切换 / 主题切换 + 持久化 + `data-theme` / `initTheme` |
 | `api/rpcClient` | 成功返回 result / error 字段抛错 / id 递增(mock fetch) |
 | `api/sseClient` | 各 SSE 事件转交 handler / `error` 仅带 data 才回调(假 EventSource) |
 | `theme/agentColors` | 已知角色配色 / 未知兜底 |
+| `utils/{markdown,sessionGroups}` | markdown 渲染 / 会话按时间分组 |
 
 ## 暂未覆盖 / 后续可加
 

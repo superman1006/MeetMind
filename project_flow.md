@@ -41,12 +41,16 @@ bootstrap()                              # apps/runtime/src/bootstrap.ts
   ├── setupLogging()
   ├── getSettings()                      # 读 .env，zod 校验 + 缓存成单例；打印全部配置项（key/token 脱敏）
   ├── pingDb()                           # PostgreSQL SELECT 1；不可达 → process.exit(1)（唯一硬退出）
-  ├── ensureChatTables()                 # 建 sessions / messages 两张表（幂等，见第十五节）
+  ├── ensureChatTables()                 # 建 sessions / messages 两张表（幂等，见第十四节）
+  ├── getCheckpointer().setup()          # 建 LangGraph checkpoint 表（断点续跑，见第六节附注）
+  ├── ensureUserTable() + seedAdminUser()# 建 users 表 + 种子用户 admin/admin（登录鉴权 + 个人记忆）
   ├── 打印本地 Rerank 模型信息           # 本地 cross-encoder，无需 key
   ├── 打印 LangSmith 追踪状态            # 看 LANGSMITH_TRACING 环境变量
   ├── getEmbedderModel()                 # 预热 @huggingface/transformers embedding 模型（lazy 单例）
-  ├── buildAgentsTables()                # 建表 + 灌种子到 PostgreSQL（见第十二节）
-  └── for agent of AGENT_NAMES: countDocs(agent)   # 打印各 agent 表里文档总数
+  ├── buildAgentsTables()                # 建表 + 灌种子到 PostgreSQL（见第十一节）
+  ├── for agent of AGENT_NAMES: countDocs(agent)   # 打印各 agent 表里文档总数
+  ├── initMcpTools()                     # 连 MCP（百度 AI Search），把 AIsearch 工具异步追加进 allTools（buildGraph 之前）
+  └── 打印已加载的 tools / skills        # allTools（本地 + MCP）+ skills/ 下的 SKILL.md
 ```
 
 > 启动唯一的硬退出是 `pingDb()` 失败。LLM 的 key/baseUrl 缺失不会在启动时拦截（zod 给空串默认值），
@@ -69,7 +73,7 @@ createServer((req, res) => ...)          # 每来一个请求跑一次
   ├── GET  /events           → handleEvents(req, res, url)
   │     ├── 必带 ?sessionId，否则 400
   │     ├── 写 SSE 响应头 + 一帧 ": connected"
-  │     ├── addClient(sessionId, res)    # 登记长连（见 server/sse.ts）
+  │     ├── addClient(sessionId, res)    # 登记长连（见 server/sseServer.ts）
   │     └── req.on("close") → removeClient(...)
   └── 其它                   → 404
 ```
@@ -81,38 +85,60 @@ createServer((req, res) => ...)          # 每来一个请求跑一次
 
 ## 四、RPC 分诊 `handleRpc(graph, body)`
 
-`apps/runtime/src/server/rpc.ts` 按 `body.method` 分发。慢任务（讨论、整理）**不 await**，立即回 `{ok:true}`，真正内容走 SSE：
+`apps/runtime/src/server/rpcServer.ts` 按 `body.method` 分发。慢任务（讨论、整理）**不 await**，立即回 `{ok:true}`，真正内容走 SSE。`graph` 以可变持有者 `GraphHolder` 传入，`model.set` 热切换模型时 `buildGraph()` 重建并换掉 `current`：
 
 ```
 handleRpc(graph, { method, params, id })
+  │  ── 用户 / 账号 ──
+  ├── user.login        → userStore.verifyUser(username, password)    # 密码错回 {ok:false}，不走 rpcError
+  ├── user.registry     → userStore.createUser(...)                    # 用户名重复回 {ok:false, reason:"exists"}
+  ├── user.getMemory    → userStore.getMemory(username)                # 个人记忆（注入 system prompt）
+  ├── user.setMemory    → userStore.setMemory(username, memory)        # 整字段覆盖，空串=清空
+  │
+  │  ── 讨论 ──
   ├── chat.send         # 开一轮讨论
   │     ├── 校验 sessionId + requirement（非空字符串，否则 -32602）
   │     ├── isSessionEnded? → -32000（会议已结束，DB 持久化的兜底）
   │     ├── isBusy?         → -32000（同会话一次只能跑一轮）
   │     ├── setBusy(true) + new AbortController + setController
-  │     ├── runExecution(graph, sessionId, requirement, signal)   # ← 不 await（见第五节）
-  │     │     .catch(记日志).finally(清 busy + controller)         # 必须 .catch，否则拖垮进程
+  │     ├── runExecution(graph.current, sessionId, requirement, signal)  # ← 不 await（见第五节）
+  │     │     .catch(记日志).finally(清 busy + controller)               # 必须 .catch，否则拖垮进程
   │     └── return { ok:true }
+  ├── chat.interrupt    → getController(sessionId)?.abort()     # 让 graph.stream 抛错，本轮丢弃；幂等
   │
-  ├── chat.interrupt    # 打断进行中的讨论
-  │     └── getController(sessionId)?.abort()    # 让 graph.stream 抛错，本轮丢弃；幂等
+  │  ── 断点续跑（崩溃残留的未完成轮，见第六节附注）──
+  ├── chat.getResumable → getPendingThread + getState(checkpoint)  # 回 { resumable, pendingTurns }（崩溃前超出 DB 的发言）
+  ├── chat.resume       → resumeExecution(graph.current, sessionId, signal)   # ← 不 await，从 checkpoint 续跑
+  ├── chat.discardResumable → clearPendingThread + deleteThreadCheckpoints     # 放弃并删 checkpoint
+  │
+  │  ── 标题 / 压缩 / 审批 ──
+  ├── chat.summaryTitle → summarizeTitle(requirement) → renameSession  # 新会话首条输入 → ≤15 字标题（与 chat.send 并行）
+  ├── chat.compact      → compactSession(sessionId)                    # 上下文压缩：滚动总结较早历史写进 sessions
+  ├── toolApproval      → toolApprovals.resolve(approvalId, approved)  # HITL 审批回执，兑现挂起的 Promise
   │
   ├── chat.end          # 结束会议 → 后台整理纪要
   │     ├── isSessionEnded? / isBusy? → 拒绝
   │     ├── markSessionEnded(sessionId)          # 持久化「已结束」，此后锁定
   │     ├── setBusy(true)
-  │     └── summarizeMeeting(sessionId)          # ← 不 await（见第十六节）
+  │     └── summarizeMeeting(sessionId)          # ← 不 await（见第十五节）
   │
-  ├── session.create    → chatStore.createSession(title ?? "新会话")
-  ├── session.list      → chatStore.listSessions()
+  │  ── 会话（按 username 隔离）──
+  ├── session.create    → chatStore.createSession(title ?? "新会话", username)
+  ├── session.list      → chatStore.listSessions(username)
   ├── session.messages  → chatStore.getMessages(sessionId)         # 前端渲染历史气泡
   ├── session.rename    → chatStore.renameSession(sessionId, title)
   ├── session.delete    → isBusy? 拒绝 : chatStore.deleteSession(sessionId)  # 级联删消息
+  │
+  │  ── 模型热切换 ──
+  ├── model.get         → getCurrentModelConfig()                # 回填设置面板（apiKey 脱敏）
+  ├── model.set         → setModelOverrides(...) + graph.current = buildGraph()   # 重建图让新模型生效
+  ├── model.test        → 用给定/当前配置 probe.invoke("ping")    # 探连通性
   └── 未匹配            → -32601（未知方法）
 ```
 
 > 会话运行时状态（busy 标记 + AbortController）在内存里，见 `apps/runtime/src/server/sessions.ts`，重启即重置。
-> 消息 / 跨轮记忆持久化在 PostgreSQL（`chatStore`）。
+> HITL 工具审批的挂起 Promise 在 `apps/runtime/src/server/toolApprovals.ts`（也在内存）。
+> 消息 / 跨轮记忆 / 用户 / 个人记忆持久化在 PostgreSQL（`chatStore` / `userStore`）。
 
 ---
 
@@ -123,29 +149,38 @@ handleRpc(graph, { method, params, id })
 ```
 runExecution()
   ├── userTurn = { agent_name:"user", role:"用户", message:requirement, next_agent:architect, done:false, used_rag:false }
-  ├── priorMessages = await chatStore.getMessages(sessionId)   # 跨轮记忆起点（首轮为空）
+  ├── priorMessages = await chatStore.getContextMessages(sessionId)  # 跨轮记忆起点：若已压缩则是「摘要 + 边界后尾部」，否则全量（刻意不用 getMessages 那条展示全量）
+  ├── owner = await chatStore.getSessionOwner(sessionId); userMemory = owner ? await userStore.getMemory(owner) : ""
   ├── seedMessages  = [...priorMessages, userTurn]
-  ├── initialState  = { requirement, messages: seedMessages, next_agent:null, done:false, iteration:0 }
+  ├── initialState  = { requirement, messages: seedMessages, next_agent:null, done:false, iteration:0,
+  │                     rewritten_query:"", expansion_terms:"", intent:"", intent_score:0, intent_margin:0,
+  │                     route:"", userMemory }            # 预处理字段初值；userMemory 透传给各 agent
   │
+  ├── threadId = `${sessionId}:${randomUUID()}`; chatStore.setPendingThread(sessionId, threadId)   # 落在途标记，供崩溃后 getResumable 探测
   ├── stream = await graph.stream(initialState, {
+  │       configurable: { thread_id: threadId },  # checkpointer 按 thread 存档；崩溃后可从这里续跑
   │       recursionLimit: 50,
   │       streamMode: ["custom","values"],   # custom=节点发的自定义事件；values=每节点跑完的完整 state
   │       signal,                              # chat.interrupt abort() 透传到这里，中止 LLM + 图迭代
   │   })
   │
   ├── for await ([mode, chunk] of stream):
-  │     ├── mode==="custom" → sse.send(sessionId, chunk.kind, chunk)   # turn_start / delta / using_tools / turn_end
-  │     └── mode==="values" → finalState = chunk                       # 留最后一帧
+  │     ├── mode==="custom" → sseServer.send(sessionId, chunk.kind, chunk)   # turn_start / delta / using_tools / tool_approval_request / tool_result / turn_end
+  │     └── mode==="values" → finalState = chunk                            # 留最后一帧
   │
-  ├── if signal.aborted:                       # 被打断 → 不落库（保留上一轮记忆），发 round_done(interrupted)
-  │     └── sse.send("round_done", { done:false, interrupted:true }); return
+  ├── if signal.aborted:                       # 被打断 → 不落库（保留上一轮记忆 + checkpoint 供续跑），发 round_done(interrupted)
+  │     └── sseServer.send("round_done", { done:false, interrupted:true }); return
   │
   ├── newTurns = finalState.messages.slice(priorMessages.length)   # 本轮新增 = userTurn + 各 agent 回复
   ├── await chatStore.appendMessages(sessionId, newTurns)          # 增量落库，不重写整段
-  └── sse.send("round_done", { done: finalState.done })
+  ├── clearPendingThread(sessionId) + deleteThreadCheckpoints(threadId)   # 正常收尾：清在途标记 + 删本轮 checkpoint
+  └── sseServer.send("round_done", { done: finalState.done })
 
-  catch: signal.aborted 时同样按「打断」处理；其余异常 → sse.send("error", {message})
+  catch: signal.aborted 时同样按「打断」处理；其余异常 → sseServer.send("error", {message})
         （整个函数体在 try 里，绝不让 Promise reject 逃逸拖垮进程）
+
+resumeExecution(graph, sessionId, signal)    # chat.resume 调：不带 initialState，从在途 thread 的 checkpoint 续跑
+  └── graph.stream(null, { configurable:{ thread_id }, ... })   # 其余转发 / 落库逻辑与 runExecution 一致
 ```
 
 ---
@@ -164,11 +199,24 @@ buildGraph()                          # apps/runtime/src/graph/builder.ts
   │
   ├── new StateGraph(AgentStateAnnotation)
   ├── for name of AGENT_NAMES: addNode(`${name}_node`, createNode(agent))   # 每个 agent 一个节点（见第八节）
-  ├── addEdge(START, `${ARCHITECT}_node`)                                   # 固定入口：总从架构师开始
+  ├── addNode("rewrite_node" / "intent_node" / "route_node")                # 预处理流水线三节点（见第六节附注）
+  ├── addNode(`${ASSISTANT}_node`, createAssistantNode())                   # 右侧回答助手单节点
+  │
+  ├── addEdge(START, "rewrite_node")                                        # 入口改为预处理流水线（不再直接进架构师）
+  ├── addEdge("rewrite_node", "intent_node"); addEdge("intent_node", "route_node")
+  ├── addConditionalEdges("route_node", routeAfterPreprocess, {            # 按 state.route 分叉
+  │       assistant_node, architect_node })                               #   chat → 助手；其余 → 架构师全团队
+  ├── addEdge(`${ASSISTANT}_node`, END)                                     # 助手答完即结束，不进协作循环
   ├── for name of AGENT_NAMES: addConditionalEdges(`${name}_node`, routeToWhichAgent, routeMap)
-  │     # 每个节点出口都挂同一个路由函数；routeMap 把返回值映射到实际节点 + END
-  └── graph.compile()
+  │     # 左侧团队：每个节点出口都挂同一个路由函数；routeMap 把返回值映射到实际节点 + END
+  └── graph.compile({ checkpointer: getCheckpointer() })                    # 挂 PostgresSaver，支持断点续跑
 ```
+
+> **预处理流水线（第六节附注）**：`rewrite_node`（改写独立句 + 检索扩展词，`graph/preprocess/rewriteNode.ts`）→ `intent_node`（本地 NLI 意图识别 + 规则短路，`intentNode.ts`）→ `route_node`（按 top-1/top-2 间距 `INTENT_ROUTE_MARGIN` 分流，`routeNode.ts`）。三者每轮入口只跑一次、不计入 `iteration`，各自只往 state 写自己的字段（见第十三节）。`routeAfterPreprocess`（`graph/route.ts`）只读 `state.route` 做纯分派：`"chat"` → `assistant_node`，其余（含空串 / `"team"`）→ `architect_node`（安全兜底）。
+>
+> **回答助手 `createAssistantNode()`**：复用 createNode 那套流式 plumbing，但调 `AssistantAgent.answer()`（`agents/assistant.ts`）——Phase 1 复用同一工具循环，Phase 2 改成纯自然语言流式收尾（不结构化、不填 `next_agent`），返回 `{ messages:[response], done:true }`，由 `assistant_node → END`，绝不碰 `iteration`。
+>
+> **断点续跑（checkpointer）**：`graph.compile` 挂 `PostgresSaver`（`graph/checkpointer.ts` 单例，复用 `PG_URL`，自管 `checkpoint*` 表）。`runExecution` 每轮带一个 `thread_id` 跑；被打断 / 崩溃时 checkpoint + DB 里的在途标记（`setPendingThread`）残留 = 可恢复信号，`chat.getResumable` / `chat.resume`（`resumeExecution`，传 `null` 从最后 checkpoint 续）/ `chat.discardResumable` 三个 RPC 据此工作。
 
 ---
 
@@ -178,7 +226,9 @@ buildGraph()                          # apps/runtime/src/graph/builder.ts
 
 ```
 async (state, config) => {...}
-  ├── requirement = state.requirement;  history = formatHistory(state.messages)   # 历史拼成文本喂 agent
+  ├── requirement = state.rewritten_query || state.requirement   # 喂 agent 的是改写后的独立句；为空兜底回原话
+  ├── expansionTerms = state.expansion_terms; intent = state.intent; userMemory = state.userMemory  # 预处理 / 记忆透传
+  ├── history = formatHistory(state.messages)                    # 历史拼成文本喂 agent
   ├── iteration = (state.iteration ?? 0) + 1;  turnId = `${agent.name}-${iteration}`
   │
   ├── writer = config.writer            # 有 writer（服务端流式）才发事件；无 writer（CLI）退回非流式
@@ -186,8 +236,11 @@ async (state, config) => {...}
   ├── onDelta(text)     = writer({ kind:"delta", turnId, text })        # Phase 2 每多吐一截 content 就推一次
   ├── onToolUse(name)   = writer({ kind:"using_tools", turnId, tool:name }) + toolsUsed.push(name)  # 工具执行前推
   ├── onToolResult(rec) = writer({ kind:"tool_result", turnId, name, args, result })  # 工具执行后推（带返回结果）
+  ├── onToolApproval(info) = writer({ kind:"tool_approval_request", turnId, approvalId, tool, risk, args })
+  │                          + await toolApprovals.createPending(approvalId, config.signal)   # risk>low 的工具执行前挂起等用户拍板（HITL）
   │
-  ├── response = await agent.invoke(requirement, history, { onDelta, onToolUse, onToolResult })   # ← 核心（见第九节）
+  ├── response = await agent.invoke(requirement, history,        # ← 核心（见第八节）
+  │       { userMemory, intent, expansionTerms, onDelta, onToolUse, onToolResult, onToolApproval })
   ├── if toolsUsed.length: response.tool = toolsUsed.join(", ")         # 本轮用过的工具名随消息落库
   │   # response.tool_calls（每次调用的 {name,args,result}）由 base.ts 在 invoke 内部挂好，随消息落库
   ├── printAgentInfo(...)               # 控制台美化输出
@@ -208,21 +261,25 @@ async (state, config) => {...}
 `apps/runtime/src/agents/base.ts`。子类只重写 `get systemPrompt()`，公共能力都在这里。
 
 ```
-BaseAgent.invoke(requirement, history, opts?={ onDelta, onToolUse, onToolResult })
+BaseAgent.invoke(requirement, history, opts?={ userMemory, intent, expansionTerms, onDelta, onToolUse, onToolResult, onToolApproval })
   │
   ├── cleanBadChars(requirement / history / prompts)   # 清除孤立 UTF-16 surrogate 码点
   ├── this.RAGRetriever.restart()                      # 清零本轮 callCount（供 used_rag 统计）
-  ├── Allmessages = [ SystemMessage(systemPrompt + _routingPrompt()),
-  │                   HumanMessage(_userPrompt(requirement, history)) ]
+  ├── Allmessages = [ SystemMessage(memorySection(userMemory) + systemPrompt + _routingPrompt()),
+  │                   HumanMessage(_userPrompt(requirement, history, intent)) ]
+  │     # memorySection：会话主人的个人记忆拼到 system prompt 最前（空则不加）；intent 作一句弱参考提示
   │
-  ├── ===== Phase 1：工具循环（复用构造阶段已 bindTools 的 _modelWithTools，不约束输出格式）=====
-  │     for i in 0.._MAX_TOOL_ITERATIONS(=3):
+  ├── ===== Phase 1：工具循环 runToolLoop(...)（agents/toolLoop.ts，base 与 assistant 共用）=====
+  │     for i in 0.._MAX_TOOL_ITERATIONS(=3):           # 复用构造阶段已 bindTools 的 _modelWithTools，不约束输出格式
   │         aiMsg = await this._modelWithTools.invoke(Allmessages); Allmessages.push(aiMsg)
   │         if aiMsg.tool_calls 为空: break              # LLM 不再要工具 → 进收尾
   │         for tc of tool_calls:
   │             toolToRun = allTools.find(t => t.name === tc.name)
+  │             if !toolToRun: push ToolMessage("(未知工具，已跳过)"); continue   # 模型幻觉的工具：跳过、只回占位（满足 OpenAI 协议）
+  │             risk = toolToRun.metadata.risk ?? "low"
+  │             if risk>low && onToolApproval: approved = await onToolApproval({...})   # HITL：执行前等用户拍板；拒绝则回 "(用户拒绝使用该工具)"
   │             opts.onToolUse?.(tc.name)                # 执行前通知前端常驻 "UsingTools: <工具名>"
-  │             out = await toolToRun.invoke(tc.args, { configurable:{ agentName: this.name } })  # 见第十、十一节
+  │             out = await toolToRun.invoke(tc.args, { configurable:{ agentName: this.name, expansionTerms } })  # 见第九、十节
   │             toolCallRecords.push({ name:tc.name, args:tc.args, result:out }); opts.onToolResult?.(record)  # 收集明细 + 推 tool_result
   │             Allmessages.push(new ToolMessage({ content: out, tool_call_id: tc.id }))
   │     # 跑满 3 轮仍要工具 → 强制进 Phase 2（warning 一条）
@@ -259,14 +316,23 @@ BaseAgent.invoke(requirement, history, opts?={ onDelta, onToolUse, onToolResult 
 ```
 toolRegister.ts        # ToolRegister 类 + 单例 toolRegister + 同步登记本地工具 + export const allTools
                        #   register(tool) → push 进 allTools（原地 push，所以 MCP 工具后续追加也能被看到）
-                       #   本地工具：ragSearchTool / echoTool / processTool / listDirTool / readFileTool
+                       #   每个工具带 metadata.risk（low/medium/high）；> low 的执行前触发 HITL 审批
+                       #   本地工具：ragSearchTool / readFileTool / listDirTool / globTool / grepTool /
+                       #            echoTool / processTool / fileEditTool / writeFileTool / webFetchTool / skillTool
 
-ragSearchTool.ts       # rag_search —— 私有 RAG，按调用时 config.configurable.agentName
+ragSearchTool.ts       # rag_search (low) —— 私有 RAG，按调用时 config.configurable.agentName + expansionTerms
                        #   getRetriever(agentName).retrieve(query)（见第十节）查对应 agent 的私有表
-echoTool.ts            # echo —— 命令行 echo 回显文本（execFile，不过 shell，无注入）
-processTool.ts         # list_processes —— ps aux 看进程，可选 filter 关键字
-listDirTool.ts         # list_dir —— fs.readdir 列目录（标注 dir/file）
-readFileTool.ts        # read_file —— fs.readFile 读文件文本（超 2 万字符截断）
+readFileTool.ts        # Read (low) —— fs.readFile 读文件文本（超 2 万字符截断）
+listDirTool.ts         # list_dir (low) —— fs.readdir 列目录（标注 dir/file）
+globTool.ts            # glob (low) —— 按 glob 模式匹配文件路径
+grepTool.ts            # grep (low) —— 文件内容按正则搜索
+echoTool.ts            # echo (low) —— 命令行 echo 回显文本（execFile，不过 shell，无注入）
+processTool.ts         # list_processes (low) —— ps aux 看进程，可选 filter 关键字
+skillTool.ts           # skill (low) —— 列举 / 读取 skills/<name>/SKILL.md
+fileEditTool.ts        # Edit (medium) —— 文件精确字符串替换（落盘）
+webFetchTool.ts        # web_fetch (medium) —— 抓取 URL 正文
+writeFileTool.ts       # Write (high) —— 写 / 覆盖文件（副作用最强，默认必经审批）
+pathAuth.ts            # 文件类工具（Read/Edit/Write/glob/grep/list_dir）的路径授权 / 越界防护
 
 mcp/mcpClient.ts       # initMcpTools()：bootstrap 调（buildGraph 之前），用 @langchain/mcp-adapters 的
                        #   MultiServerMCPClient 连百度 AI Search 的 MCP（SSE），getTools() 发现的工具
@@ -279,7 +345,7 @@ mcp/mcpClient.ts       # initMcpTools()：bootstrap 调（buildGraph 之前）�
 
 ## 十、RAG 检索 `RAGRetriever.retrieve(query)`
 
-`apps/runtime/src/database/rag_retriever.ts`。**关键字 + 向量并行召回 → 合并去重 → 本地 cross-encoder rerank**：
+`apps/runtime/src/database/retrieval/rag_retriever.ts`。**关键字 + 向量并行召回 → 合并去重 → 本地 cross-encoder rerank**：
 
 ```
 retrieve(query, topN = rerankTopN(默认5))
@@ -297,7 +363,7 @@ retrieve(query, topN = rerankTopN(默认5))
   │
   ├── 2) merge(keywordHits, vectorHits)       # 按行 id 取并集去重（关键字在前，向量补后）；空则返回 []
   │
-  └── 3) reranker.rerank(query, contents, finalN=topN)    # apps/runtime/src/database/reranker.ts
+  └── 3) reranker.rerank(query, contents, finalN=topN)    # apps/runtime/src/database/models/reranker.ts
         ├── 本地 cross-encoder（@huggingface/transformers，默认 Xenova/bge-reranker-base，dtype=q8）
         │     逐条算 query↔候选 的 logit → sigmoid 当 relevanceScore，按分数降序取前 finalN
         └── 失败兜底：原序返回前 finalN 条（score=0），不让链路断
@@ -312,7 +378,7 @@ retrieve(query, topN = rerankTopN(默认5))
 
 ## 十一、灌库 `buildAgentsTables()` → `loadSeedsToPg(agent)`
 
-`apps/runtime/src/database/initializer.ts`：
+`apps/runtime/src/database/ingestion/initializer.ts`：
 
 ```
 buildAgentsTables()                         # bootstrap 里调；返回每 agent 本次新增条数
@@ -320,15 +386,15 @@ buildAgentsTables()                         # bootstrap 里调；返回每 agent
   └── for agent of AGENT_NAMES:
         loadSeedsToPg(agent)                # 单 agent 灌库核心
           ├── getSeedsContent(agent)              # 扫 data/seed/<agent>/，loadFile() 按后缀分发
-          │     # loaders.ts: loadJson / loadMarkdown / loadPdf(pdfjs) / loadDocx(mammoth) / loadText
+          │     # ingestion/loaders.ts: loadJson / loadMarkdown / loadPdf(pdfjs) / loadDocx(mammoth) / loadText
           │     # 目录不存在时回退旧布局 data/seed/<agent>_seeds.json
-          ├── splitDocs(contents)                 # splitters.ts，按 doc.type 二次切块（@langchain/textsplitters）
-          ├── ensureAgentTable(agent)             # client.ts：建表 <prefix>_<agent>
+          ├── splitDocs(contents)                 # ingestion/splitters.ts，按 doc.type 二次切块（@langchain/textsplitters）
+          ├── ensureAgentTable(agent)             # connection/client.ts：建表 <prefix>_<agent>
           │     # 列 id text 主键 / content text / metadata jsonb / embedding vector(dim)
           │     # 建表前 getEmbedModelDim() 探维度；建 HNSW 向量索引 + GIN trigram 索引
           ├── getExistingIds(agent)               # 取现有 id 集合（幂等去重）
           ├── docId = `${agent}_${md5(content)[:12]}`   # 内容 hash 作主键 → 幂等，跳过已存在
-          ├── embedBatch(newContents)             # embedding.ts：本地 ONNX 算 384 维向量
+          ├── embedBatch(newContents)             # models/embedding.ts：本地 ONNX 算 384 维向量
           └── INSERT ... ON CONFLICT (id) DO NOTHING
 
 resetAgentDb(agent)                         # 开发者工具：deleteAgentTable + loadSeedsToPg（重灌单 agent）
@@ -336,11 +402,19 @@ resetAgentDb(agent)                         # 开发者工具：deleteAgentTable
 
 ---
 
-## 十二、路由决策 `routeToWhichAgent(state)`
+## 十二、路由决策 `apps/runtime/src/graph/route.ts`
+
+两条条件边函数（决策本身在 `route_node` / 各 agent 里，这里只读 state 做纯分派）：
 
 ```
-routeToWhichAgent(state)               # apps/runtime/src/graph/route.ts
-  │   （被所有节点的条件边调用，返回值经 routeMap 映射到节点 / END）
+routeAfterPreprocess(state)            # 预处理流水线之后的分叉（route_node → ?）
+  ├── state.route === "chat"        → `${ASSISTANT}_node`   # 右侧回答助手单节点
+  └── 其余（含空串 / "team"）        → `${ARCHITECT}_node`   # 左侧架构师全团队（安全兜底）
+        # 决策在 route_node：按 top-1/top-2 间距 ≥ INTENT_ROUTE_MARGIN(默认0.08) 判可信，
+        # 可信时按意图分流（闲聊/知识问答→chat，开发需求/任务指令→team），判定不了默认 chat
+
+routeToWhichAgent(state)               # 左侧团队内 agent 间路由（被每个 agent 节点的条件边调用）
+  │   （返回值经 routeMap 映射到节点 / END）
   ├── iteration >= maxIterations    → END          # 安全上限（默认 15）
   ├── state.done === true           → END          # 架构师宣布完成
   ├── isAgentName(state.next_agent) → `${next}_node`
@@ -354,7 +428,16 @@ routeToWhichAgent(state)               # apps/runtime/src/graph/route.ts
 ```ts
 // apps/runtime/src/graph/state.ts —— LangGraph Annotation.Root，带 reducer 的共享 state
 export const AgentStateAnnotation = Annotation.Root({
-  requirement: Annotation<string>({ reducer: (_e, u) => u, default: () => "" }),            // 整轮不变
+  requirement:     Annotation<string>({ reducer: (_e, u) => u, default: () => "" }),            // 整轮不变（用户原话）
+  // ── 预处理流水线产出（每轮入口跑一次；其它字段都用「覆盖」reducer）──
+  rewritten_query: Annotation<string>({ ... default: () => "" }),   // rewrite_node：改写后的独立句（喂 agent / 检索）
+  expansion_terms: Annotation<string>({ ... default: () => "" }),   // rewrite_node：检索扩展词（只透传给 rag_search）
+  intent:          Annotation<string>({ ... default: () => "" }),   // intent_node：命中意图标签（弱参考提示 + 分流依据）
+  intent_score:    Annotation<number>({ ... default: () => 0 }),    // intent_node：命中标签置信分（仅展示）
+  intent_margin:   Annotation<number>({ ... default: () => 0 }),    // intent_node：top-1/top-2 间距（route_node 据它分流）
+  route:           Annotation<string>({ ... default: () => "" }),   // route_node：本轮分流决策 "chat" / "team"
+  userMemory:      Annotation<string>({ ... default: () => "" }),   // 会话主人个人记忆（拼进各 agent system prompt）
+  // ── 协作循环字段 ──
   messages:    Annotation<AgentResponse[]>({ reducer: (e, u) => e.concat(u), default: () => [] }), // 只追加
   next_agent:  Annotation<string | null>({ reducer: (_e, u) => u, default: () => null }),
   done:        Annotation<boolean>({ reducer: (_e, u) => u, default: () => false }),
@@ -372,21 +455,29 @@ export type AgentState = typeof AgentStateAnnotation.State;
 
 ## 十四、持久化 `chatStore`（PostgreSQL）
 
-`apps/runtime/src/database/chatStore.ts`。两张表，与 agent 表共用同一个 pool：
+`apps/runtime/src/database/chat/chatStore.ts`。两张表，与 agent 表共用同一个 pool：
 
 ```
-sessions   ( id text 主键, title text, created_at timestamptz, ended boolean )
+sessions   ( id text 主键, owner text → 归属用户名, title text, created_at, ended boolean,
+             pending_thread_id text,                    # 在途 thread_id（崩溃残留 = 可恢复信号）
+             summary text, summarized_through_seq int )  # 上下文压缩：边界前的滚动摘要 + 已折进摘要的最大 seq（未压过 = -1）
 messages   ( id bigserial 主键, session_id text → sessions(id) ON DELETE CASCADE,
              seq int, agent_name, role, message, next_agent, done, used_rag, tool, tool_calls jsonb, created_at )
              # 一条 messages 行 = 一条 AgentResponse；tool_calls 存每次工具调用的 {name,args,result}；建 (session_id, seq) 联合索引
 
-ensureChatTables()   # bootstrap 调；CREATE TABLE IF NOT EXISTS + ALTER ADD COLUMN IF NOT EXISTS（兼容旧表补 ended/tool/tool_calls 列）
-createSession(title) → { id(randomUUID), title, created_at, ended:false }
-listSessions()       → 按 created_at DESC
-getMessages(id)      → 按 seq ASC（回填 created_at 给前端展示发送时间）
+ensureChatTables()   # bootstrap 调；CREATE TABLE IF NOT EXISTS + ALTER ADD COLUMN IF NOT EXISTS（兼容旧表补 owner/pending_thread/compact_* 等列）
+createSession(title, owner) → { id(randomUUID), title, created_at, ended:false }   # 归属当前登录用户
+listSessions(owner)  → 只列该用户的会话，按 created_at DESC
+getMessages(id)      → 按 seq ASC 全量（回填 created_at；给前端展示）
+getContextMessages(id) → 喂 LLM 的历史：压过缩则「合成摘要一条 + 边界后尾部」，否则全量（控上下文长度）
 appendMessages(id, turns)  → seq 接已有最大值往后排，增量插入
+getSessionOwner(id)  → 取会话归属用户名（供加载个人记忆）
+setPendingThread / getPendingThread / clearPendingThread   # 在途 thread 标记，配合 checkpointer 做断点续跑
 renameSession / markSessionEnded / isSessionEnded / deleteSession(级联删消息)
 ```
+
+> 上下文压缩在 `apps/runtime/src/server/compaction.ts`（`compactSession`）：把边界前历史滚动总结成 `compact_summary` 写回 sessions，`messages` 表不动（前端展示仍全量）。
+> 用户账号 + 个人记忆在 `apps/runtime/src/database/users/userStore.ts`（`users` 表：`verifyUser` / `createUser` / `getMemory` / `setMemory`，种子用户 admin/admin）。
 
 ---
 
@@ -396,7 +487,7 @@ renameSession / markSessionEnded / isSessionEnded / deleteSession(级联删消�
 
 ```
 summarizeMeeting(sessionId)
-  ├── messages = await chatStore.getMessages(sessionId)    # 空则 sse.send("summary_error")
+  ├── messages = await chatStore.getMessages(sessionId)    # 空则 sseServer.send("summary_error")
   ├── transcript = formatTranscript(messages)              # 整轮转录拼成纯文本
   ├── architect = getSummaryAgents()[ARCHITECT]            # 与图各持一套无状态 agent，不走 RAG
   ├── summary = await architect.summarizeAll(transcript)   # ★ 单次 LLM 调用同时产出 minutes + 各角色工作段
@@ -404,7 +495,7 @@ summarizeMeeting(sessionId)
   │     # 取代旧版「架构师 1 次纪要 + 5 个角色各 1 次」共 6 次调用；失败返回占位结构而非抛出
   ├── md = composeSummaryMarkdown(sessionId, minutes, works, generatedAt)   # 纯函数组装整份 markdown
   ├── writeFile(<PROJECT_ROOT>/data/summary/<sessionId>.md, md)
-  └── sse.send("summary_done", { file })                   # 失败则 sse.send("summary_error", { message })
+  └── sseServer.send("summary_done", { file })             # 失败则 sseServer.send("summary_error", { message })
 ```
 
 ---
@@ -419,11 +510,14 @@ getSettings()                          # apps/runtime/src/config/settings.ts
         ├── PostgreSQL     : pgUrl / pgTablePrefix          # 表名 <prefix>_<agent>
         ├── Embedding      : embeddingModelName / embeddingCacheDir
         ├── 本地 Rerank    : rerankModelName / rerankDtype
+        ├── 意图分类       : intentModelName(mDeBERTa-v3-xnli) / intentDtype(q8) / intentRouteMargin(0.08)  # 见预处理流水线
         ├── 检索参数       : retrieveTopN(20) / rerankTopN(5)
         ├── Web 搜索       : baiduSearchMcpUrl / baiduSearchApiKey
         └── 运行时         : logLevel / maxIterations(15)
-        # env 名按 .env 全大写 SNAKE（API_KEY / PG_URL / ...）；seedDataPath、embeddingCacheDir 经 resolveRel 锚定根目录
+        # env 名按 .env 全大写 SNAKE（API_KEY / PG_URL / INTENT_ROUTE_MARGIN / ...）；seedDataPath、embeddingCacheDir 经 resolveRel 锚定根目录
 ```
+
+> **模型热切换**：`setModelOverrides({apiKey?,baseUrl?,modelName?})` 写入进程内覆盖 + 清 settings 缓存；`model.set` 调它后 `buildGraph()` 重建图让新模型生效（agent 只在构造期读 settings）。`getCurrentModelConfig()` 回当前生效配置（apiKey 脱敏）供设置面板回填。
 
 `PROJECT_ROOT` 从 `settings.ts` 向上四级（config→src→runtime→apps）到仓库根，`data/` `models/` `.env` 都在根、两个 app 共享。
 
@@ -438,6 +532,7 @@ getSettings()                          # apps/runtime/src/config/settings.ts
 | `turn_start`  | 某 agent 节点开始 | `{ turnId, agent_name, role }` |
 | `delta`       | Phase 2 流式收尾每多吐一截 | `{ turnId, text }` |
 | `using_tools` | 工具执行前 | `{ turnId, tool }` |
+| `tool_approval_request` | 高风险工具执行前（HITL，等 `toolApproval` 回执） | `{ turnId, approvalId, tool, risk, args }` |
 | `tool_result` | 工具执行后 | `{ turnId, name, args, result }` |
 | `turn_end`    | 某 agent 节点结束 | `{ turnId, next_agent, done, used_rag }` |
 | `round_done`  | 一轮讨论结束 | `{ done }` 或 `{ done:false, interrupted:true }` |
@@ -451,42 +546,55 @@ getSettings()                          # apps/runtime/src/config/settings.ts
 | 文件 | 职责 |
 |------|------|
 | `index.ts` | 进程入口：load dotenv → bootstrap → buildGraph → startServer(3002) |
-| `bootstrap.ts` | 启动自检：pingDb / ensureChatTables / 预热 embedding / buildAgentsTables / countDocs |
+| `bootstrap.ts` | 启动自检：pingDb / ensureChatTables / checkpointer.setup / ensureUserTable+seedAdmin / 预热 embedding / buildAgentsTables / initMcpTools |
 | `server/httpServer.ts` | HTTP 服务：POST /api（JSON-RPC）+ GET /events（SSE）|
-| `server/rpc.ts` | `handleRpc` 按 method 分诊（chat.* / session.*）|
-| `server/runExecution.ts` | 跑一轮讨论，graph.stream 转 SSE，增量落库 |
-| `server/sse.ts` | SSE 长连登记表 + `send(sessionId, event, data)` |
+| `server/rpcServer.ts` | `handleRpc` 按 method 分诊（chat.* / session.* / user.* / model.* / toolApproval）|
+| `server/runExecution.ts` | runExecution / resumeExecution：graph.stream 转 SSE，增量落库，配合 checkpoint 续跑 |
+| `server/sseServer.ts` | SSE 长连登记表 + `send(sessionId, event, data)` |
 | `server/sessions.ts` | 会话运行时状态：busy 标记 + AbortController（内存）|
+| `server/toolApprovals.ts` | HITL 工具审批：createPending(挂起 Promise) / resolve(approvalId, approved) |
+| `server/compaction.ts` | compactSession()：上下文压缩，滚动总结较早历史写 sessions.summary |
+| `server/titleSummary.ts` | summarizeTitle()：新会话首条输入 → ≤15 字标题 |
 | `server/meetingSummary.ts` | 会议结束整理：summarizeAll → 写 data/summary/<id>.md |
-| `config/settings.ts` | zod Settings 单例（读 .env + 相对路径锚定）、PROJECT_ROOT |
-| `config/constants.ts` | AGENT_NAMES、角色常量、`isAgentName()` |
-| `agents/base.ts` | BaseAgent 抽象类：invoke() 两阶段 + cleanBadChars + ModelOutputSchema + summarizeAll |
+| `config/settings.ts` | zod Settings 单例 + 模型热切换覆盖（setModelOverrides / getCurrentModelConfig）、PROJECT_ROOT |
+| `config/constants.ts` | AGENT_NAMES / ASSISTANT / INTENT_LABELS / 规则白名单（CHITCHAT_GREETINGS / TEAM_KEYWORDS）/ `isAgentName()` |
+| `agents/base.ts` | BaseAgent 抽象类：invoke() 两阶段 + cleanBadChars + memorySection + ModelOutputSchema + summarizeAll |
+| `agents/toolLoop.ts` | runToolLoop()：Phase 1 工具循环（执行 / HITL 审批 / 跳过未知工具），base 与 assistant 共用 |
+| `agents/assistant.ts` | AssistantAgent：右侧回答助手 answer()（工具循环 + 纯文本流式收尾，不结构化）|
 | `agents/{architect,backend,frontend,tester,pm}.ts` | 5 个角色子类（只重写 systemPrompt）|
 | `agents/streamStructured.ts` | `streamStructuredContent`：流式结构化输出逐段吐 content 增量 |
-| `graph/builder.ts` | buildGraph()、buildAllAgents()、节点工厂 createNode()、formatHistory() |
-| `graph/route.ts` | routeToWhichAgent()，条件边路由逻辑 |
+| `graph/builder.ts` | buildGraph()、buildAllAgents()、节点工厂 createNode() / createAssistantNode()、formatHistory() |
+| `graph/preprocess/rewriteNode.ts` | rewrite_node：改写独立句 + 检索扩展词（withStructuredOutput）|
+| `graph/preprocess/intentNode.ts` | intent_node：本地 NLI 意图识别 + 问候/开发关键词规则短路；算 intent_margin |
+| `graph/preprocess/routeNode.ts` | route_node：按 top-1/top-2 间距分流 chat / team |
+| `graph/route.ts` | routeAfterPreprocess()（预处理分叉）+ routeToWhichAgent()（agent 间路由）|
+| `graph/checkpointer.ts` | PostgresSaver 单例 + deleteThreadCheckpoints()（断点续跑）|
 | `graph/state.ts` | AgentStateAnnotation（Annotation.Root）|
 | `graph/streamEvents.ts` | NodeStreamChunk（节点发的自定义流事件类型）|
-| `database/client.ts` | getPgPool() / pingDb() / ensureExtensions() / ensureAgentTable() / countDocs() / deleteAgentTable() |
-| `database/constants.ts` | getTableName(agent) → `<prefix>_<agent>` |
-| `database/embedding.ts` | getEmbedderModel() / getEmbedModelDim() / embed() / embedBatch() —— 本地 ONNX embedding |
-| `database/reranker.ts` | rerank() —— 本地 cross-encoder（含失败降级）|
-| `database/initializer.ts` | buildAgentsTables() / loadSeedsToPg(agent) / resetAgentDb(agent) —— 灌种子（幂等）|
-| `database/loaders.ts` | loadFile() —— 按扩展名分发到各格式 loader |
-| `database/splitters.ts` | splitDocs() —— 按 doc.type 切块 |
-| `database/rag_retriever.ts` | RAGRetriever —— VectorSearch + KeyWordSearch 并行 + 本地 rerank；getRetriever(name) 缓存 |
-| `database/chatStore.ts` | sessions / messages 持久化 |
+| `database/index.ts` | 数据库子模块的汇总导出（barrel）|
+| `database/connection/client.ts` | getPgPool() / pingDb() / ensureExtensions() / ensureAgentTable() / countDocs() / deleteAgentTable() |
+| `database/connection/constants.ts` | getTableName(agent) → `<prefix>_<agent>` |
+| `database/models/embedding.ts` | getEmbedderModel() / getEmbedModelDim() / embed() / embedBatch() —— 本地 ONNX embedding |
+| `database/models/reranker.ts` | rerank() —— 本地 cross-encoder（含失败降级）|
+| `database/models/intentClassifier.ts` | classifyIntent() —— 本地 zero-shot NLI 意图分类（懒加载单例）|
+| `database/retrieval/rag_retriever.ts` | RAGRetriever —— VectorSearch + KeyWordSearch 并行 + 本地 rerank；getRetriever(name) 缓存 |
+| `database/ingestion/initializer.ts` | buildAgentsTables() / loadSeedsToPg(agent) / resetAgentDb(agent) —— 灌种子（幂等）|
+| `database/ingestion/loaders.ts` | loadFile() —— 按扩展名分发到各格式 loader |
+| `database/ingestion/splitters.ts` | splitDocs() —— 按 doc.type 切块 |
+| `database/chat/chatStore.ts` | sessions / messages 持久化 + 压缩状态 + 在途 thread 标记 |
+| `database/users/userStore.ts` | users 表：verifyUser / createUser / getMemory / setMemory（账号 + 个人记忆）|
 | `tools/toolRegister.ts` | ToolRegister 类 + 单例 + 本地工具登记 + export allTools |
-| `tools/ragSearchTool.ts` | rag_search 工具（私有 RAG，按 config.configurable.agentName 分 agent）|
-| `tools/echoTool.ts` | echo 工具（命令行 echo 回显）|
-| `tools/processTool.ts` | list_processes 工具（ps aux 看进程）|
-| `tools/listDirTool.ts` | list_dir 工具（列目录）|
-| `tools/readFileTool.ts` | read_file 工具（读文件文本）|
+| `tools/ragSearchTool.ts` | rag_search (low)（私有 RAG，按 config.configurable.agentName 分 agent）|
+| `tools/readFileTool.ts` / `listDirTool.ts` / `globTool.ts` / `grepTool.ts` | Read / list_dir / glob / grep（low，只读文件/目录）|
+| `tools/echoTool.ts` / `processTool.ts` / `skillTool.ts` | echo / list_processes / skill（low）|
+| `tools/fileEditTool.ts` / `webFetchTool.ts` / `writeFileTool.ts` | Edit / web_fetch（medium）/ Write（high，落盘，经 HITL 审批）|
+| `tools/pathAuth.ts` | 文件类工具的路径授权 / 越界防护 |
 | `tools/mcp/mcpClient.ts` | initMcpTools()：MultiServerMCPClient 接入 MCP（AIsearch）+ JSON-Schema→zod shim |
 | `utils/utils.ts` | printAgentInfo() / printBanner() / cleanBadChars() 等 |
 | `utils/logger.ts` | getLogger() / setupLogging() |
+| `skills/<name>/SKILL.md` | skill 工具读取的技能说明 |
 | `data/seed/<agent>/` | 各 agent 种子文件目录（json / pdf / docx / md / txt）|
-| `models/` | 本地模型缓存（embedding + reranker 的 ONNX 权重）|
+| `models/` | 本地模型缓存（embedding + reranker + 意图分类的 ONNX 权重）|
 
 ---
 
@@ -502,30 +610,35 @@ getSettings()                          # apps/runtime/src/config/settings.ts
         │                           │                            │
         ├── pingDb                  ├── buildAllAgents           ├── POST /api → handleRpc
         ├── ensureChatTables       │     └── new XxxAgent()      │     ├── chat.send → runExecution (不 await)
-        ├── getEmbedderModel       │           ├── RAGRetriever  │     ├── chat.interrupt → controller.abort()
-        ├── buildAgentsTables       │           └── ChatOpenAI    │     ├── chat.end → summarizeMeeting (不 await)
-        │   └── loadSeedsToPg       │                 +bindTools  │     └── session.*  → chatStore
-        │       ├── loadFile        ├── addNode(createNode)       │
-        │       ├── splitDocs       └── addConditionalEdges       └── GET /events → addClient (SSE 长连)
-        │       ├── ensureAgentTable          │
+        ├── checkpointer.setup     │           ├── RAGRetriever  │     ├── chat.interrupt → controller.abort()
+        ├── ensureUserTable        │           └── ChatOpenAI    │     ├── chat.resume → resumeExecution (不 await)
+        ├── getEmbedderModel       │                 +bindTools  │     ├── chat.compact / chat.summaryTitle
+        ├── buildAgentsTables       ├── 预处理 rewrite/intent/route │     ├── toolApproval → toolApprovals.resolve
+        │   └── loadSeedsToPg       ├── assistant_node            │     ├── chat.end → summarizeMeeting (不 await)
+        │       ├── loadFile        ├── addNode(createNode)       │     ├── user.* / model.*
+        │       ├── splitDocs       └── compile({checkpointer})   │     └── session.*  → chatStore
+        │       ├── ensureAgentTable          │                  └── GET /events → addClient (SSE 长连)
         │       ├── embedBatch                ▼
-        │       └── INSERT          runExecution → graph.stream(["custom","values"], signal)
-        └── countDocs                         │
-                                              ▼
-                                   createNode(agent) 闭包  ──writer──▶ SSE: turn_start/delta/using_tools/tool_result/turn_end
+        │       └── INSERT          START → rewrite → intent → route ─┬─► assistant_node → END
+        ├── countDocs                         │                       └─► architect_node → …（团队循环）
+        └── initMcpTools                      ▼
+                                   runExecution → graph.stream(["custom","values"], signal, thread_id)
                                               │
                                               ▼
-                                   agent.invoke(req, hist, {onDelta,onToolUse})
-                                              ├── Phase1: _modelWithTools 工具循环
-                                              │     └── rag_search → RAGRetriever.retrieve
-                                              │           ├── VectorSearch  (embed + pgvector <=>)
-                                              │           ├── KeyWordSearch (pg_trgm word_similarity)
-                                              │           ├── merge (按 id 去重)
-                                              │           └── rerank (本地 cross-encoder)
-                                              │     ├── echo / list_processes / list_dir / read_file → 命令行 / 文件
+                                   createNode(agent) 闭包  ──writer──▶ SSE: turn_start/delta/using_tools/tool_approval_request/tool_result/turn_end
+                                              │
+                                              ▼
+                                   agent.invoke(req, hist, {userMemory,intent,expansionTerms,onDelta,onToolUse,onToolApproval})
+                                              ├── Phase1: runToolLoop（_modelWithTools 工具循环；risk>low 先 HITL 审批）
+                                              │     ├── rag_search → RAGRetriever.retrieve
+                                              │     │     ├── VectorSearch  (embed + pgvector <=>)
+                                              │     │     ├── KeyWordSearch (pg_trgm word_similarity)
+                                              │     │     ├── merge (按 id 去重)
+                                              │     │     └── rerank (本地 cross-encoder)
+                                              │     ├── Read/list_dir/glob/grep/Edit/Write/echo/list_processes/web_fetch/skill → 文件 / 命令行 / 网络
                                               │     └── AIsearch → 百度 AI Search MCP（MultiServerMCPClient 适配）
                                               └── Phase2: withStructuredOutput(ModelOutput)
                                                     └── _buildAgentResponse → AgentResponse
                                                           │
-                                              runExecution: appendMessages → SSE round_done
+                                              runExecution: appendMessages → 清 pending/checkpoint → SSE round_done
 ```

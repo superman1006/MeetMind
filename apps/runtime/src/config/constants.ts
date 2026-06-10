@@ -60,6 +60,21 @@ export const ASSISTANT_INTENTS: readonly string[] = ["闲聊", "知识问答"];
 /** 「闲聊」意图标签字面量——问候规则短路命中时直接判这个，集中成常量避免裸串（须与 INTENT_LABELS 里的一致）。 */
 export const INTENT_CHITCHAT = "闲聊";
 
+/** 「开发需求」意图标签字面量——开发关键词规则短路命中时直接判这个，强制走架构师全团队（须与 INTENT_LABELS 里的一致）。 */
+export const INTENT_DEV = "开发需求";
+
+/**
+ * 开发关键词白名单：当用户输入「包含」其中任一词时，intent_node 在跑 NLI 之前直接规则短路判为
+ * 「开发需求」，强制分流到架构师全团队。
+ *
+ * 与问候白名单（CHITCHAT_GREETINGS）的「整句精确匹配」刻意不同——这里用「包含」匹配：只要句子里出现
+ * 这些明确指向软件协作工作的词，就认为该惊动团队，不交给脆弱的 NLI 去赌那 0.0x 的噪声分。需要增删词
+ * 直接改这个数组即可。匹配细节见 intentNode.matchTeamKeywordRule。
+ */
+export const TEAM_KEYWORDS: readonly string[] = [
+  "项目", "架构", "测试", "前端", "后端", "产品", "构建", "调试", "开发",
+];
+
 /**
  * 问候 / 寒暄白名单：当「整句」基本就是其中一个问候语（允许带尾缀语气词、标点）时，
  * intent_node 在跑 NLI 之前直接规则短路判为「闲聊」。

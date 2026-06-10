@@ -1,9 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
 
-// route_node / routeAfterPreprocess 都间接读 getSettings（阈值 + logger 的 logLevel）；
+// route_node / routeAfterPreprocess 都间接读 getSettings（margin 阈值 + logger 的 logLevel）；
 // mock 成固定值，让分流判断可控、不读 .env。
 vi.mock("../../config/settings.js", () => ({
-  getSettings: () => ({ maxIterations: 15, logLevel: "INFO", intentRouteThreshold: 0.5 }),
+  getSettings: () => ({ maxIterations: 15, logLevel: "INFO", intentRouteMargin: 0.08 }),
 }));
 
 import { routeAfterPreprocess } from "../route.js";
@@ -17,6 +17,7 @@ function makeState(partial: Partial<AgentState>): AgentState {
     expansion_terms: "",
     intent: "",
     intent_score: 0,
+    intent_margin: 0,
     route: "",
     userMemory: "",
     messages: [],
@@ -42,24 +43,25 @@ describe("routeAfterPreprocess（条件边纯分派）", () => {
   });
 });
 
-describe("createRouteNode（NLI label + score 分流决策）", () => {
+describe("createRouteNode（NLI label + margin 分流决策）", () => {
   const routeNode = createRouteNode();
 
-  it("助手意图 + 分数过阈值 → chat", async () => {
-    expect(await routeNode(makeState({ intent: "闲聊", intent_score: 0.9 }))).toEqual({ route: "chat" });
-    expect(await routeNode(makeState({ intent: "知识问答", intent_score: 0.5 }))).toEqual({ route: "chat" });
+  it("间距够大 + 助手意图（闲聊 / 知识问答）→ chat", async () => {
+    expect(await routeNode(makeState({ intent: "闲聊", intent_margin: 0.2 }))).toEqual({ route: "chat" });
+    expect(await routeNode(makeState({ intent: "知识问答", intent_margin: 0.08 }))).toEqual({ route: "chat" });
   });
 
-  it("助手意图但分数低于阈值 → team（安全兜底）", async () => {
-    expect(await routeNode(makeState({ intent: "闲聊", intent_score: 0.49 }))).toEqual({ route: "team" });
+  it("间距够大 + 非助手意图（开发需求 / 任务指令）→ team", async () => {
+    expect(await routeNode(makeState({ intent: "开发需求", intent_margin: 0.3 }))).toEqual({ route: "team" });
+    expect(await routeNode(makeState({ intent: "任务指令", intent_margin: 0.1 }))).toEqual({ route: "team" });
   });
 
-  it("非助手意图（开发需求 / 任务指令）无论分数多高 → team", async () => {
-    expect(await routeNode(makeState({ intent: "开发需求", intent_score: 0.99 }))).toEqual({ route: "team" });
-    expect(await routeNode(makeState({ intent: "任务指令", intent_score: 0.99 }))).toEqual({ route: "team" });
+  it("间距过小（判定不了）→ 默认走 chat，无论命中哪个意图", async () => {
+    expect(await routeNode(makeState({ intent: "开发需求", intent_margin: 0.027 }))).toEqual({ route: "chat" });
+    expect(await routeNode(makeState({ intent: "闲聊", intent_margin: 0.05 }))).toEqual({ route: "chat" });
   });
 
-  it("意图为空 / 分类失败（score=0）→ team", async () => {
-    expect(await routeNode(makeState({ intent: "", intent_score: 0 }))).toEqual({ route: "team" });
+  it("意图为空 / 分类失败（margin=0）→ 判定不了 → chat", async () => {
+    expect(await routeNode(makeState({ intent: "", intent_margin: 0 }))).toEqual({ route: "chat" });
   });
 });

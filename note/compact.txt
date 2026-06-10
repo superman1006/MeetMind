@@ -1,0 +1,41 @@
+MeetMind 上下文压缩（compact）是怎么做的
+========================================
+
+一句话：把会话「边界之前的历史」滚动总结成一份摘要存进 sessions 行，
+喂给 LLM 的历史从此 = 摘要 + 边界之后的尾部消息。不删 messages 表。
+
+核心数据（sessions 表两列，chatStore.ts）
+------------------------------------------
+- summary               TEXT  默认 ''   —— 滚动摘要文本
+- summarized_through_seq INT  默认 -1   —— 已折进摘要的最大消息 seq（边界）
+  -1 = 还没压过，等价于「全部消息都在边界之后」。
+
+压缩流程（server/compaction.ts: compactSession）
+-----------------------------------------------
+1. 读当前压缩状态 {summary, throughSeq} 和会话最大 seq。
+2. 取「边界之后所有未折进摘要」的消息 = getMessagesAfterSeq(throughSeq)。
+   没有新消息 → 直接返回 compacted:false（空会话 / 已全压过）。
+3. 把这些消息拼成纯文本转录，配上提示词（旧摘要 + 新转录 → 合并去重产新摘要）。
+   提示词要求保留：核心需求 / 设计决策 / 各角色关键结论 / 待办 / 约束数据；
+   丢弃寒暄、重复、过程性发言。
+4. 调 LLM（ChatOpenAI，maxTokens=1024，temperature=0.3）生成新摘要。
+5. 成功 → setCompaction：UPDATE sessions 的 summary + 把边界推到当前最大 seq。
+
+消费端（chatStore.ts: getContextMessages）
+------------------------------------------
+runExecution 拼 LLM 历史时调它：
+  返回 = [摘要合成的一条消息] + 边界之后的尾部消息
+  summary 为空时退化为全量 getMessages（与压缩前行为一致）。
+注意：只有「喂给 LLM」走这条；前端展示历史仍走全量 getMessages，不受影响。
+
+两条安全约定
+------------
+- 压缩不删 / 不改 messages 表，只 UPDATE sessions 两列。随时可回滚到全量。
+- 失败（模型异常 / 空摘要）时**不推进边界**：宁可这次不压、下次再试，
+  绝不能让某段历史既不在摘要里、又被排除出尾部 → 凭空丢上下文。
+
+触发方式
+--------
+手动：前端 Composer 用量圆环里的「压缩」按钮，按下即压、不做阈值判断
+（chat.compact RPC → compactSession）。圆环本身按消息文本估算用量、80% 提示，
+但压缩动作目前是用户手点触发，不是自动。

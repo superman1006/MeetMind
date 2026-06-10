@@ -40,9 +40,16 @@ export const AgentStateAnnotation = Annotation.Root({
     reducer: (_existing, update) => update,
     default: () => "",
   }),
-  // intent_node 产出：命中标签的 NLI 置信分（0~1）。route_node 据它 + 阈值决定要不要分流到右侧助手。
-  // 分类失败为 0；阈值兜底会让 0 分自然落回架构师全团队。
+  // intent_node 产出：命中标签的 NLI 置信分（0~1）。仅用于打日志展示，route_node 不再据它分流。
+  // 分类失败为 0。
   intent_score: Annotation<number>({
+    reducer: (_existing, update) => update,
+    default: () => 0,
+  }),
+  // intent_node 产出：top-1 与 top-2 标签的得分间距（0~1）。route_node 据它判断分类是否「有信号」：
+  // 间距大 → 按命中意图分流；间距小（贴均匀线，无信号）→ 判定不了，默认走右侧回答助手。
+  // 规则短路命中问候时给满间距 1；分类失败 / 只有单标签时为 0。
+  intent_margin: Annotation<number>({
     reducer: (_existing, update) => update,
     default: () => 0,
   }),

@@ -80,10 +80,8 @@ export async function runToolLoop(
       const toolName = tc.name ?? "";
       const toolArgs = tc.args ?? {};
       const toolId = tc.id ?? "";
-      logger.info(
-        `[${opts.callerName}] → 调用工具 ${toolName} args=${JSON.stringify(toolArgs)}`,
-      );
-      // 按名字从工具列表里找到要执行的工具；找不到就回一个占位提示，不让循环崩
+
+      // 按名字从工具列表里找到要执行的工具
       let toolToRun = undefined;
       for (const t of allTools) {
         if (t.name === toolName) {
@@ -91,40 +89,53 @@ export async function runToolLoop(
           break;
         }
       }
+
+      // 未知工具（名字不在 allTools 里，模型有时会幻觉出不存在的工具）：跳过本次调用，
+      // 不执行、不记录(records)、不回调前端(onToolResult)。但仍要给这个 tool_call_id 回一条
+      // ToolMessage 占位——否则 OpenAI 协议会因 tool_call 没有对应结果而在下一轮 invoke 报错；
+      // 占位里说明工具不存在，引导模型别再调它。
+      if (!toolToRun) {
+        logger.warning(
+          `[${opts.callerName}] 模型调用了未知工具 ${toolName}，已跳过本次调用`,
+        );
+        const skipHint = `(未知工具，已跳过: ${toolName})`;
+        messages.push(new ToolMessage({ content: skipHint, tool_call_id: toolId }));
+        continue;
+      }
+
+      logger.info(
+        `[${opts.callerName}] → 调用工具 ${toolName} args=${JSON.stringify(toolArgs)}`,
+      );
+      // 工具的 risk 等级（自定义元数据，见各 *Tool.ts）；缺省视为 low。
+      const toolMeta = (toolToRun as { metadata?: Record<string, unknown> }).metadata;
+      const risk = (toolMeta?.risk as string | undefined) ?? "low";
+      // HITL 审批：risk 高于 low 且上层提供了 onToolApproval 时，执行前先等用户拍板。
+      let approved = true;
+      if (risk !== "low" && opts.onToolApproval) {
+        approved = await opts.onToolApproval({
+          toolName,
+          risk,
+          args: toolArgs as Record<string, unknown>,
+        });
+      }
       let toolResult: string;
-      if (toolToRun) {
-        // 工具的 risk 等级（自定义元数据，见各 *Tool.ts）；缺省视为 low。
-        const toolMeta = (toolToRun as { metadata?: Record<string, unknown> }).metadata;
-        const risk = (toolMeta?.risk as string | undefined) ?? "low";
-        // HITL 审批：risk 高于 low 且上层提供了 onToolApproval 时，执行前先等用户拍板。
-        let approved = true;
-        if (risk !== "low" && opts.onToolApproval) {
-          approved = await opts.onToolApproval({
-            toolName,
-            risk,
-            args: toolArgs as Record<string, unknown>,
-          });
-        }
-        if (!approved) {
-          // 用户拒绝：跳过执行。仍要给这次 tool_call 一个结果（否则 OpenAI 协议
-          // 会因 tool_call_id 没有对应 ToolMessage 而报错），用一句占位说明代替。
-          toolResult = "(用户拒绝使用该工具)";
-        } else {
-          // 工具执行前通知前端显示 "UsingTools: <工具名>" 标签
-          opts.onToolUse?.(toolName);
-          // 通过 config 把 agent 名 + 检索扩展词传给工具
-          // （rag_search 据 agentName 查对应私有表、据 expansionTerms 扩展 query；其它工具忽略）
-          const out = await toolToRun.invoke(toolArgs, {
-            configurable: {
-              agentName: opts.agentName,
-              expansionTerms: opts.expansionTerms ?? "",
-            },
-          });
-          // 工具 invoke 可能返回 string 或 ToolMessage；统一收敛成字符串
-          toolResult = typeof out === "string" ? out : JSON.stringify(out);
-        }
+      if (!approved) {
+        // 用户拒绝：跳过执行。仍要给这次 tool_call 一个结果（否则 OpenAI 协议
+        // 会因 tool_call_id 没有对应 ToolMessage 而报错），用一句占位说明代替。
+        toolResult = "(用户拒绝使用该工具)";
       } else {
-        toolResult = `(未知工具: ${toolName})`;
+        // 工具执行前通知前端显示 "UsingTools: <工具名>" 标签
+        opts.onToolUse?.(toolName);
+        // 通过 config 把 agent 名 + 检索扩展词传给工具
+        // （rag_search 据 agentName 查对应私有表、据 expansionTerms 扩展 query；其它工具忽略）
+        const out = await toolToRun.invoke(toolArgs, {
+          configurable: {
+            agentName: opts.agentName,
+            expansionTerms: opts.expansionTerms ?? "",
+          },
+        });
+        // 工具 invoke 可能返回 string 或 ToolMessage；统一收敛成字符串
+        toolResult = typeof out === "string" ? out : JSON.stringify(out);
       }
       // 记下这次调用的明细(name/args/result)：收集起来落库，并实时回调给前端加按钮
       const record: ToolCallRecord = {

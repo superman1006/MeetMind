@@ -54,6 +54,7 @@ async function runExecution(
     expansion_terms: "",
     intent: "",
     intent_score: 0,
+    intent_margin: 0,
     route: "",
     // CLI 无登录用户概念，个人记忆恒为空串（memorySection 据此不加内容）。
     userMemory: "",

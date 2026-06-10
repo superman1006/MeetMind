@@ -21,19 +21,26 @@ const emit = defineEmits<{ decide: [approved: boolean] }>();
 </template>
 
 <style scoped>
-/* 悬浮在 Composer 上方的圆角卡片:四角全圆 + 强调色描边 + 抬升阴影,
-   四周留 margin 与输入框/侧边拉开间隔,像一块浮起来的提示牌。 */
+/* 悬浮在 Composer 上方的圆角卡片:四角全圆 + 紫色光环(描边 + 内圈 + 外散光,
+   和输入坞聚焦时同款)+ 抬升阴影,四周留 margin 与输入框/侧边拉开间隔,
+   像一块浮起来的提示牌。宽度收到容器的 2/3,左对齐,避免中间大段留白。 */
 .approval {
+  --glow: 124, 58, 237;            /* 紫色 rgb,与 Composer 聚焦光环同色 */
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin: 12px 16px;
+  width: 66.67%;
+  box-sizing: border-box;
+  margin: 12px auto;
   padding: 12px 16px;
   background: var(--bg-elevated);
-  border: 1px solid var(--accent);
+  border: 1px solid rgba(var(--glow), 0.7);
   border-radius: 14px;
-  box-shadow: var(--shadow-lift);
+  box-shadow:
+    0 0 0 1px rgba(var(--glow), 0.5),
+    0 0 24px -2px rgba(var(--glow), 0.45),
+    0 10px 28px -10px rgba(0, 0, 0, 0.5);
 }
 .info { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .hint { font-size: 12px; color: var(--text-dim); flex-shrink: 0; }

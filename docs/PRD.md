@@ -164,16 +164,24 @@ MeetMind 当前是一个 TypeScript monorepo（`apps/runtime` 后端 + `apps/des
 
 | 模块 | 已实现能力 | 关键实现位置 |
 |---|---|---|
-| 多 Agent 编排 | 5 角色 Agent + LangGraph 条件边路由；架构师固定入口；`routeToWhichAgent` 兜底防卡死 | `graph/builder.ts`、`graph/route.ts`、`graph/state.ts` |
-| Agent 推理 | 两阶段 invoke（Phase 1 工具循环 + Phase 2 结构化收尾）；结构化输出 `{content, next_agent, done}` | `agents/base.ts` |
+| 多 Agent 编排 | 5 角色 Agent + LangGraph 条件边路由；`routeToWhichAgent` 兜底防卡死 | `graph/builder.ts`、`graph/route.ts`、`graph/state.ts` |
+| 预处理分流 | 入口流水线 `rewrite_node`（改写独立句 + 检索扩展词）→ `intent_node`（本地 NLI 意图识别 + 问候/开发关键词规则短路）→ `route_node`（按 top-1/top-2 间距 `INTENT_ROUTE_MARGIN` 分流），不计入 `iteration` | `graph/preprocess/*`、`database/models/intentClassifier.ts` |
+| 回答助手 | 右侧单节点工作流：闲聊/知识问答走 `assistant_node`（工具循环 + 纯文本流式收尾，不结构化、不路由），答完即 END，与团队隔离 | `agents/assistant.ts`、`graph/builder.ts: createAssistantNode` |
+| Agent 推理 | 两阶段 invoke（Phase 1 工具循环 + Phase 2 结构化收尾）；结构化输出 `{content, next_agent, done}`；个人记忆经 `memorySection` 注入 systemPrompt | `agents/base.ts`、`agents/toolLoop.ts` |
 | RAG 检索 | 向量 kNN（pgvector）+ 关键字召回（pg_trgm）并行 → 去重 → 本地 cross-encoder rerank → top-K | `database/retrieval/rag_retriever.ts` |
-| 本地模型 | 本地 embedding（all-MiniLM-L6-v2，384 维）+ 本地 rerank（bge-reranker-base），纯 ONNX 无 torch | `database/models/embedding.ts`、`reranker.ts` |
-| 工具体系 | LangChain `tool()` 单例 + `ToolRegister`；现有工具：`rag_search` / `web_fetch` / `read_file` / `list_dir` / `list_processes` / `echo`；MCP 工具异步登记（百度 AI Search） | `tools/*Tool.ts`、`tools/toolRegister.ts`、`tools/mcp/mcpClient.ts` |
-| 会话持久化 | `sessions` / `messages` 两张表；会话增删改查、消息按 `(session_id, seq)` 落库；会话"已结束"状态持久化 | `database/chat/chatStore.ts` |
-| 实时通信 | 单条 SSE firehose（按 sessionId 路由）+ JSON-RPC；流式 delta、工具调用、轮次事件 | `server/sseServer.ts`、`server/rpcServer.ts`、`server/httpServer.ts` |
+| 本地模型 | 本地 embedding（all-MiniLM-L6-v2，384 维）+ 本地 rerank（bge-reranker-base）+ 本地意图 NLI（mDeBERTa-v3-xnli），纯 ONNX 无 torch | `database/models/*` |
+| 工具体系 | LangChain `tool()` 单例 + `ToolRegister`，每个带 `risk` 等级；现有工具：`rag_search` / `Read` / `list_dir` / `glob` / `grep` / `echo` / `list_processes` / `skill`（low）、`Edit` / `web_fetch`（medium）、`Write`（high）；MCP `AIsearch` 异步登记（百度 AI Search） | `tools/*Tool.ts`、`tools/toolRegister.ts`、`tools/mcp/mcpClient.ts` |
+| HITL 工具审批 | `risk > low` 的工具执行前发 `tool_approval_request` 挂起，等前端 `toolApproval` 回执才执行/拒绝 | `agents/toolLoop.ts`、`server/toolApprovals.ts` |
+| 会话持久化 | `sessions` / `messages` 两张表（按 owner 用户隔离）；消息按 `(session_id, seq)` 落库；"已结束"状态持久化 | `database/chat/chatStore.ts` |
+| 断点续跑 | 图挂 `PostgresSaver` checkpointer；崩溃残留轮经 `chat.getResumable` / `chat.resume` / `chat.discardResumable` 续跑或放弃 | `graph/checkpointer.ts`、`server/runExecution.ts: resumeExecution` |
+| 上下文压缩 | 用量达阈值时把较早历史滚动总结成摘要（`sessions.summary`），喂 LLM 走「摘要 + 尾部」，`messages` 表不动 | `server/compaction.ts`、`chatStore.getContextMessages` |
+| 用户账号 + 记忆 | `users` 表登录鉴权（种子 admin/admin）；会话按用户隔离；个人记忆读写并注入各 agent | `database/users/userStore.ts`、`server/rpcServer.ts: user.*` |
+| 自动标题 | 新会话首条输入经一次独立 LLM 调用生成 ≤15 字标题（与 `chat.send` 并行） | `server/titleSummary.ts`、`rpcServer.ts: chat.summaryTitle` |
+| 模型热切换 | `model.set` 写进程内覆盖 + `buildGraph()` 重建图换模型；`model.test` 探连通性 | `config/settings.ts`、`server/rpcServer.ts: model.*` |
+| 实时通信 | 单条 SSE firehose（按 sessionId 路由）+ JSON-RPC；流式 delta、工具调用、审批请求、轮次事件 | `server/sseServer.ts`、`server/rpcServer.ts`、`server/httpServer.ts` |
 | 讨论控制 | 开始讨论（`chat.send`）/ 打断（`chat.interrupt`，AbortController）/ 结束并整理纪要（`chat.end`） | `server/rpcServer.ts`、`server/runExecution.ts` |
 | 会议纪要 | 一次 LLM 调用产出 `minutes` + 各角色工作段；失败降级占位 | `agents/base.ts: summarizeAll`、`server/meetingSummary.ts` |
-| 前端聊天 | 聊天窗口、流式气泡、工具调用展示、思考中占位、会议结束弹窗、会话列表/搜索、**手动重命名**、删除 | `apps/desktop/src/components/*`、`stores/*` |
+| 前端聊天 | 聊天窗口、流式气泡、工具调用展示、HITL 审批弹窗、思考中占位、会议结束弹窗、会话列表/搜索、**手动重命名**、删除、登录/注册 | `apps/desktop/src/components/*`、`stores/*` |
 | 前端主题 | 浅/深主题切换（含气泡配色随主题切换）；空会话占位提示 | `App.vue`、`stores/ui.ts`、`theme/agentColors.ts` |
 
 ### 5.2 现有约束与既定设计（不在本期修改）

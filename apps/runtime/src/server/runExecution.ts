@@ -68,6 +68,7 @@ export async function runExecution(
       expansion_terms: "",
       intent: "",
       intent_score: 0,
+      intent_margin: 0,
       route: "",
       userMemory,
       messages: seedMessages,

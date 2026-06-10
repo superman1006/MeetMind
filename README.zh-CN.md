@@ -123,12 +123,17 @@ pnpm build && pnpm start:prod
 
 后端 3002 暴露 `POST /api`（JSON-RPC）与 `GET /events?sessionId=…`（SSE）：
 
-- **JSON-RPC method**：`chat.send`（开一轮讨论，后台跑、立即返回，过程走 SSE）、`chat.interrupt`（打断本轮，abort 后丢弃不落库）、`chat.end`（结束会议→整理纪要写 `data/summary/<id>.md`）、`session.create` / `session.list` / `session.messages` / `session.rename` / `session.delete`。
-- **SSE 事件**：`turn_start` / `delta` / `using_tools` / `tool_result`（某次工具调用的 name/args/result）/ `turn_end` / `round_done` / `error` / `summary_done`·`summary_error`。
-- **会话与消息持久化在 PostgreSQL**（`<prefix>_sessions` / `<prefix>_messages` 两张表），刷新/重开会话会从 DB 还原历史；删除会话级联删消息。
+- **JSON-RPC method**：
+  - *chat*：`chat.send`（开一轮讨论，后台跑、立即返回，过程走 SSE）、`chat.interrupt`（打断本轮，abort 后丢弃不落库）、`chat.summaryTitle`（用新会话首条输入自动生成标题）、`chat.compact`（用量达阈值时把较早历史滚动总结成摘要）、`chat.getResumable` / `chat.resume` / `chat.discardResumable`（崩溃残留的未完成轮：探测 / 续跑 / 放弃）、`chat.end`（结束会议→整理纪要写 `data/summary/<id>.md`）。
+  - *session*（按用户隔离）：`session.create` / `session.list` / `session.messages` / `session.rename` / `session.delete`。
+  - *user*：`user.login` / `user.registry` / `user.getMemory` / `user.setMemory`（账号 + 注入 system prompt 的个人记忆）。
+  - *tool*：`toolApproval`（兑现一条挂起的 HITL 工具审批）。
+  - *model*：`model.get` / `model.set`（热切换 LLM 端点，会重建图）/ `model.test`（探连通性）。
+- **SSE 事件**：`turn_start` / `delta` / `using_tools` / `tool_approval_request`（HITL：高风险工具执行前等用户拍板）/ `tool_result`（某次工具调用的 name/args/result）/ `turn_end` / `round_done` / `error` / `summary_done`·`summary_error`。
+- **会话与消息持久化在 PostgreSQL**（`<prefix>_sessions` / `<prefix>_messages` 两张表，按用户隔离），刷新/重开会话会从 DB 还原历史；删除会话级联删消息。图还会把 LangGraph checkpoint 写进自管的 `checkpoint*` 表用于崩溃恢复。
 - **消息时间戳**：每条气泡下方显示发送时间（`2026-6-2 18:23`）。**纯前端展示**——live 消息用浏览器当前时间，历史消息用 DB `messages.created_at`（该列由 `DEFAULT now()` 自动生成，app 不额外写入）。
 
-> ⚠️ runtime 用 `tsx` 启动、不 watch：改了服务端代码（尤其 `server/rpc.ts` 新增 method）后要**重启 runtime**，否则前端调新 method 会收到 `未知方法: xxx`。
+> ⚠️ runtime 用 `tsx` 启动、不 watch：改了服务端代码（尤其 `server/rpcServer.ts` 新增 method）后要**重启 runtime**，否则前端调新 method 会收到 `未知方法: xxx`。
 
 ---
 
@@ -170,15 +175,34 @@ MeetMind/
 
 ---
 
-## 运行流程
+## 请求分流（预处理流水线）
+
+每一轮在任何角色发言**之前**先过一条三节点预处理流水线——只在图入口跑一次，不参与 agent 间路由、不计入 `iteration`：
+
+```
+START → rewrite_node → intent_node → route_node ──┬─► assistant_node → END      (右侧「回答助手」单节点)
+                                                  └─► architect_node → … 团队   (左侧 5 角色协作)
+```
+
+1. **`rewrite_node`** —— 一次 LLM 调用（`withStructuredOutput`）产出**独立、消解指代后的 query**（`rewritten_query`，按最近历史补全代词/省略）+ **检索扩展词**（`expansion_terms`，只喂给检索层提升召回）。失败降级为原始输入。
+2. **`intent_node`** —— 本地 zero-shot NLI（`Xenova/mDeBERTa-v3-xnli`，懒加载 ONNX 单例）分到 4 个标签之一（`闲聊` / `知识问答` / `开发需求` / `任务指令`）并记下 **top-1 与 top-2 的得分间距**。两条规则短路绕过脆弱的 NLI：问候白名单（`CHITCHAT_GREETINGS`，整句匹配 → `闲聊`）与开发关键词白名单（`TEAM_KEYWORDS` —— 项目 / 架构 / 测试 / 前端 / 后端 / …，**包含**匹配 → `开发需求`）。
+3. **`route_node`** —— 按**间距**而非绝对阈值判定：NLI 对 4 标签做 softmax 后贴近均匀线（0.25），绝对分几乎过不了。`margin ≥ INTENT_ROUTE_MARGIN`（默认 `0.08`）才认为分类可信、按意图分流（`闲聊`/`知识问答` → 助手，其余 → 团队）；间距过小视为「判定不了」，**默认走轻量的回答助手**（单点回答比惊动整个团队更轻）。
+
+**回答助手**（`assistant_node`）复用同一套构造期模型 + 工具，但跑 `assistant.answer()` 而非两阶段协作：一轮工具循环 + 纯自然语言流式收尾（不结构化、不填 `next_agent`），答完直接 `END`。它只与团队共享 `AgentState`（读历史 / 记忆），从不碰 `iteration`。
+
+---
+
+## 运行流程（左侧团队）
 
 1. **启动时**：所有 agent 的种子文件灌入对应 PostgreSQL 表（content + embedding + metadata）。
-2. **架构师输入需求** → 进入 LangGraph 流程。
+2. **需求进入** → 预处理流水线把它分流给团队（`architect_node`）。
 3. **每个 Agent 节点**（`BaseAgent.invoke`，两阶段）:
-   - **Phase 1 工具循环**：构造阶段就把一批工具 `bindTools` 到 LLM，LLM 自主决定调哪个（最多 3 轮）。工具有：`rag_search`（私有 RAG，PostgreSQL hybrid pg_trgm+pgvector + 本地 rerank）、`echo` / `list_processes` / `list_dir` / `read_file`（命令行 / 文件）、`AIsearch`（经 MultiServerMCPClient 接入百度 AI Search MCP 联网搜索）。每次调用的 `{name,args,result}` 收进 `tool_calls` 落库 + 经 `tool_result` 事件推给前端。
+   - **Phase 1 工具循环**：构造阶段就把一批工具 `bindTools` 到 LLM，LLM 自主决定调哪个（最多 3 轮）。工具有：`rag_search`（私有 RAG）、`Read` / `list_dir` / `glob` / `grep` / `echo` / `list_processes`（只读、低风险）、`Edit` / `web_fetch`（中风险）、`Write`（高风险）、`skill`、`AIsearch`（经 MultiServerMCPClient 接入百度 AI Search MCP 联网搜索）。`risk > low` 的工具执行前会发 `tool_approval_request` 事件并**等用户审批（HITL）**。每次调用的 `{name,args,result}` 收进 `tool_calls` 落库 + 经 `tool_result` 事件推给前端。
    - **Phase 2 结构化收尾**：用 `withStructuredOutput` 强制 LLM 产出 `ModelOutput { content, next_agent, done }`。
 4. **条件边路由 (`routeToWhichAgent`)**: `iteration ≥ max → END`；`done → END`；`next_agent ∈ AGENT_NAMES → 对应节点`；兜底回 architect。
-5. **架构师复盘**：CLI 提示是否继续新一轮或退出。
+5. **架构师复盘**：由人工决定继续新一轮还是结束会议。
+
+> **崩溃恢复**：编译后的图挂 `PostgresSaver` checkpointer，被打断的一轮会留下 checkpoint。重开会话时前端可探测在途 thread（`chat.getResumable`），从 checkpoint **续跑**（`chat.resume`）或**放弃**（`chat.discardResumable`）。
 
 ---
 
@@ -192,6 +216,11 @@ MeetMind/
 | 候选 `top_20` → 重排 `top_5` | 召回阶段宁多勿少；rerank 阶段宁精勿滥，留 5 条给 LLM 控住上下文长度 |
 | `Annotation` 追加式 messages | 保留完整讨论历史，符合 LangGraph 语义 |
 | 结构化输出 `ModelOutput` | 用 `withStructuredOutput` 拿 `{content, next_agent, done}`，比解析字符串标记更稳 |
+| 预处理路由（rewrite → intent → route） | 入口一次性消解 query、本地分类意图，把闲聊/问答分给轻量单节点助手、真正的开发活分给全团队——独立于 LLM 驱动的 agent 间路由，不计入 `iteration` |
+| 间距分流（非绝对阈值） | NLI 对 4 标签 softmax 后贴近均匀线，top-1/top-2 的**间距**才是可信信号；判定不了就默认走助手（比惊动团队更轻） |
+| HITL 工具审批 | 工具带 `risk` 等级（`low`/`medium`/`high`），高于 `low` 的执行前挂起等用户明确同意 |
+| `PostgresSaver` checkpoint + 续跑 | 每轮落 checkpoint，被打断/崩溃的一轮重开时可续跑或放弃 |
+| 上下文压缩 | 用量过阈值时把较早历史滚动成摘要；`messages` 表不动，前端仍展示全量 |
 | 架构师 = human-in-the-loop | 每轮结束由人工决定继续/退出 |
 | `maxIterations` 安全阀 | 防止 Agent 间无限循环 |
 
@@ -202,7 +231,7 @@ MeetMind/
 **重置某个 Agent 的 PostgreSQL 表**：
 
 ```bash
-pnpm --filter @meetmind/runtime exec tsx -e "import('./src/database/initializer.ts').then(m => m.resetAgentDb('backend'))"
+pnpm --filter @meetmind/runtime exec tsx -e "import('./src/database/ingestion/initializer.ts').then(m => m.resetAgentDb('backend'))"
 ```
 
 **完全清空 + 重灌**：

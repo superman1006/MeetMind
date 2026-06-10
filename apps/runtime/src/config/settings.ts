@@ -61,9 +61,10 @@ const SettingsSchema = z.object({
   intentModelName: z.string().default("Xenova/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7"),
   // ONNX 量化精度：q8 体积小、意图粗分类对量化不敏感；要更准可设 fp32
   intentDtype: z.string().default("q8"),
-  // 右侧分流阈值：意图命中「闲聊 / 知识问答」且置信分 ≥ 此值，才走「回答助手」单节点；
-  // 否则（低置信 / 其它意图 / 分类失败）一律落回架构师全团队。NLI 偏脆，阈值给得保守一点更稳。
-  intentRouteThreshold: z.coerce.number().default(0.5),
+  // 右侧分流间距（margin）阈值：NLI 4 标签做 softmax 归一化后分数贴近均匀线（0.25），用绝对阈值
+  // 几乎永远过不了；改判 top-1 与 top-2 的间距——间距 ≥ 此值才认为分类「有信号、可信」，按命中意图
+  // 分流（闲聊/知识问答→助手，开发需求/任务指令→团队）；间距 < 此值视为「判定不了」，默认走回答助手。
+  intentRouteMargin: z.coerce.number().default(0.08),
 
   // ---------- 检索参数 ----------
   retrieveTopN: z.coerce.number().default(20),
@@ -115,7 +116,7 @@ export function getSettings(): Settings {
     rerankDtype: process.env.RERANK_DTYPE,
     intentModelName: process.env.INTENT_MODEL_NAME,
     intentDtype: process.env.INTENT_DTYPE,
-    intentRouteThreshold: process.env.INTENT_ROUTE_THRESHOLD,
+    intentRouteMargin: process.env.INTENT_ROUTE_MARGIN,
     retrieveTopN: process.env.RETRIEVE_TOP_N,
     rerankTopN: process.env.RERANK_TOP_N,
     baiduSearchMcpUrl: process.env.BAIDU_SEARCH_MCP_URL,
