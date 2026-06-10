@@ -33,5 +33,3 @@ logs/
 # 测试覆盖率报告（vitest --coverage 自动生成）
 coverage/
 
-#视频
-*.mov
