@@ -2,7 +2,7 @@
 
 <img src="assets/banner.png" alt="MeetMind"/>
 
-### 多 Agent RAG 协作系统 · Multi-Agent RAG Collaboration
+### 数字分身会议协作系统 · AI Digital Avatars that Meet, Discuss & Summarize
 
 **English** ｜ [简体中文](README.zh-CN.md)
 
