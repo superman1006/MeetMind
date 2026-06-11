@@ -1,0 +1,3086 @@
+{
+  "version": "1.0.0",
+  "project": {
+    "name": "meetmind",
+    "languages": [
+      "typescript",
+      "json",
+      "markdown",
+      "yaml"
+    ],
+    "frameworks": [
+      "LangChain",
+      "LangGraph",
+      "PostgreSQL (pgvector)",
+      "Zod",
+      "Docker Compose"
+    ],
+    "description": "多 Agent RAG 协作系统 (TypeScript port)：5 个角色 Agent (架构师/后端/前端/测试/产品经理) 在 LangGraph 条件边驱动下自由路由，每个 Agent 拥有独立 PostgreSQL(pgvector) 表 + 私有 RAG 检索 Tool (pg_trgm 关键字召回 + pgvector kNN 向量检索 → 合并去重 → 本地 cross-encoder rerank → top-5)。",
+    "analyzedAt": "2026-05-29T15:45:03.163Z",
+    "gitCommitHash": "499a9008f25b0f4badff83e004004782909ef397"
+  },
+  "nodes": [
+    {
+      "id": "file:src/config/settings.ts",
+      "type": "file",
+      "name": "settings.ts",
+      "filePath": "src/config/settings.ts",
+      "summary": "用 zod 校验并加载 .env 环境变量的全局配置中心，缺失必填项时直接退出；附带把相对路径锚定到 PROJECT_ROOT 的 field validator。",
+      "tags": [
+        "配置",
+        "validation",
+        "entry-point",
+        "环境变量",
+        "zod"
+      ],
+      "complexity": "moderate",
+      "languageNotes": "通过 SettingsSchema.parse 做运行时校验，并用 resolveRel 把 .env 里的相对路径解析为绝对路径。"
+    },
+    {
+      "id": "function:src/config/settings.ts:getSettings",
+      "type": "function",
+      "name": "getSettings",
+      "filePath": "src/config/settings.ts",
+      "lineRange": [
+        74,
+        109
+      ],
+      "summary": "读取 process.env、清洗后交给 SettingsSchema.parse 做 zod 校验，返回类型安全的全局 settings 对象。",
+      "tags": [
+        "配置",
+        "validation",
+        "singleton",
+        "工具函数"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:src/database/client.ts",
+      "type": "file",
+      "name": "client.ts",
+      "filePath": "src/database/client.ts",
+      "summary": "PostgreSQL 连接池单例管理器：提供 pingDb 探活、ensureExtensions 启用 pgvector/pg_trgm、按 agent 建表（含 vector 列与索引）以及计数/删表工具。",
+      "tags": [
+        "数据库",
+        "service",
+        "singleton",
+        "pgvector",
+        "连接池"
+      ],
+      "complexity": "moderate",
+      "languageNotes": "ensureAgentTable 动态读取 embedding 维度建立 vector(dim) 列，是 pgvector 表结构的核心。"
+    },
+    {
+      "id": "function:src/database/client.ts:getPgPool",
+      "type": "function",
+      "name": "getPgPool",
+      "filePath": "src/database/client.ts",
+      "lineRange": [
+        30,
+        45
+      ],
+      "summary": "惰性创建并缓存 pg 连接池单例，绑定 error 事件并打印连接配置告警。",
+      "tags": [
+        "数据库",
+        "singleton",
+        "连接池"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/database/client.ts:ensureAgentTable",
+      "type": "function",
+      "name": "ensureAgentTable",
+      "filePath": "src/database/client.ts",
+      "lineRange": [
+        77,
+        107
+      ],
+      "summary": "为指定 agent 创建数据表（content 文本、embedding vector 列、metadata），并建立向量索引与 pg_trgm 全文索引。",
+      "tags": [
+        "数据库",
+        "migration",
+        "pgvector",
+        "schema-definition"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/database/client.ts:countDocs",
+      "type": "function",
+      "name": "countDocs",
+      "filePath": "src/database/client.ts",
+      "lineRange": [
+        112,
+        127
+      ],
+      "summary": "查询指定 agent 表中的文档数量，表不存在时返回 0。",
+      "tags": [
+        "数据库",
+        "工具函数",
+        "查询"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/database/constants.ts",
+      "type": "file",
+      "name": "constants.ts",
+      "filePath": "src/database/constants.ts",
+      "summary": "数据库层常量与表名规约：getTableName 按 <es_index_prefix>_<agent> 约定拼出每个 agent 的 PostgreSQL 表名。",
+      "tags": [
+        "配置",
+        "utility",
+        "数据库",
+        "命名约定"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/database/embedding.ts",
+      "type": "file",
+      "name": "embedding.ts",
+      "filePath": "src/database/embedding.ts",
+      "summary": "基于 transformers.js 的本地 embedding 模块：惰性加载 all-MiniLM-L6-v2，提供单条 embed 与批量 embedBatch，输出 384 维向量。",
+      "tags": [
+        "embedding",
+        "service",
+        "向量",
+        "transformers",
+        "singleton"
+      ],
+      "complexity": "moderate",
+      "languageNotes": "用 _extractorPromise 缓存 pipeline，首次调用会从 HuggingFace 下载约 80MB 权重。"
+    },
+    {
+      "id": "function:src/database/embedding.ts:getEmbedderModel",
+      "type": "function",
+      "name": "getEmbedderModel",
+      "filePath": "src/database/embedding.ts",
+      "lineRange": [
+        29,
+        60
+      ],
+      "summary": "惰性创建并缓存 transformers.js feature-extraction pipeline 单例，加载本地 all-MiniLM-L6-v2 模型。",
+      "tags": [
+        "embedding",
+        "singleton",
+        "transformers",
+        "模型加载"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/database/embedding.ts:embedBatch",
+      "type": "function",
+      "name": "embedBatch",
+      "filePath": "src/database/embedding.ts",
+      "lineRange": [
+        95,
+        123
+      ],
+      "summary": "分批对多条文本计算 embedding，按 batchSize 切片调用模型并把扁平输出切回每条向量。",
+      "tags": [
+        "embedding",
+        "向量",
+        "批处理",
+        "工具函数"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:src/database/initializer.ts",
+      "type": "file",
+      "name": "initializer.ts",
+      "filePath": "src/database/initializer.ts",
+      "summary": "RAG 灌库初始化器：跑 load→split→embed→bulk upsert 流水线把种子文档写入各 agent 表，用内容 md5 作为 doc-id 实现幂等；提供 buildAgentsIndices 全量建库与 resetAgentDb 单 agent 重灌。",
+      "tags": [
+        "data-pipeline",
+        "数据库",
+        "初始化",
+        "幂等",
+        "factory"
+      ],
+      "complexity": "complex",
+      "languageNotes": "generateDocId 用内容 md5 前缀做 _id，配合 getExistingIds 跳过已存在文档，实现 bulk upsert 的幂等。"
+    },
+    {
+      "id": "function:src/database/initializer.ts:getSeedsContent",
+      "type": "function",
+      "name": "getSeedsContent",
+      "filePath": "src/database/initializer.ts",
+      "lineRange": [
+        53,
+        83
+      ],
+      "summary": "遍历某 agent 的种子目录，按文件加载并合并所有文档内容，目录或文件缺失时记录告警。",
+      "tags": [
+        "data-pipeline",
+        "文件加载",
+        "初始化"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/database/initializer.ts:loadSeedsToPg",
+      "type": "function",
+      "name": "loadSeedsToPg",
+      "filePath": "src/database/initializer.ts",
+      "lineRange": [
+        127,
+        192
+      ],
+      "summary": "核心灌库流程：加载并切块种子文档、用 md5 去重、批量 embedding，再以参数化 SQL 批量 upsert 到 agent 表。",
+      "tags": [
+        "data-pipeline",
+        "数据库",
+        "embedding",
+        "幂等",
+        "bulk-insert"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/database/initializer.ts:buildAgentsIndices",
+      "type": "function",
+      "name": "buildAgentsIndices",
+      "filePath": "src/database/initializer.ts",
+      "lineRange": [
+        198,
+        205
+      ],
+      "summary": "全量建库入口：先 ensureExtensions 启用 pg 扩展，再为每个 agent 依次调用 loadSeedsToPg 灌种子。",
+      "tags": [
+        "data-pipeline",
+        "初始化",
+        "entry-point"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/database/initializer.ts:resetAgentDb",
+      "type": "function",
+      "name": "resetAgentDb",
+      "filePath": "src/database/initializer.ts",
+      "lineRange": [
+        210,
+        214
+      ],
+      "summary": "重置单个 agent 的数据表并重新灌种子，常用于开发时刷新某个 agent 的 RAG 数据。",
+      "tags": [
+        "data-pipeline",
+        "数据库",
+        "初始化",
+        "开发工具"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/database/loaders.ts",
+      "type": "file",
+      "name": "loaders.ts",
+      "filePath": "src/database/loaders.ts",
+      "summary": "多格式文档加载器：按后缀把 json/markdown/pdf/docx/txt 各自解析为带 metadata 的文档对象，loadFile 作为统一分发入口。",
+      "tags": [
+        "文件加载",
+        "serialization",
+        "data-pipeline",
+        "factory",
+        "解析"
+      ],
+      "complexity": "complex",
+      "languageNotes": "loadPdf/loadDocx 用动态 import 惰性加载 pdfjs / mammoth，避免未用到的重依赖被提前加载。"
+    },
+    {
+      "id": "function:src/database/loaders.ts:loadJson",
+      "type": "function",
+      "name": "loadJson",
+      "filePath": "src/database/loaders.ts",
+      "lineRange": [
+        26,
+        64
+      ],
+      "summary": "读取并解析 JSON 文件，支持数组或对象两种结构，逐项拆成带 source/type 等 metadata 的文档。",
+      "tags": [
+        "文件加载",
+        "serialization",
+        "json"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/database/loaders.ts:loadMarkdown",
+      "type": "function",
+      "name": "loadMarkdown",
+      "filePath": "src/database/loaders.ts",
+      "lineRange": [
+        68,
+        112
+      ],
+      "summary": "按标题切分 Markdown 文本为内容块，再做合并与清洗，输出带 metadata 的文档列表。",
+      "tags": [
+        "文件加载",
+        "markdown",
+        "解析"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/database/loaders.ts:loadPdf",
+      "type": "function",
+      "name": "loadPdf",
+      "filePath": "src/database/loaders.ts",
+      "lineRange": [
+        116,
+        153
+      ],
+      "summary": "通过动态 import 的 pdfjs 逐页抽取 PDF 文本内容，拼接为按页的文档对象。",
+      "tags": [
+        "文件加载",
+        "pdf",
+        "解析"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/database/loaders.ts:loadFile",
+      "type": "function",
+      "name": "loadFile",
+      "filePath": "src/database/loaders.ts",
+      "lineRange": [
+        206,
+        219
+      ],
+      "summary": "按文件扩展名分发到对应加载器的统一入口，不支持的后缀记录告警并跳过。",
+      "tags": [
+        "文件加载",
+        "factory",
+        "分发",
+        "entry-point"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/database/rag_retriever.ts",
+      "type": "file",
+      "name": "rag_retriever.ts",
+      "filePath": "src/database/rag_retriever.ts",
+      "summary": "RAG 混合检索器核心：并行跑 pg_trgm 关键词检索 + pgvector kNN 向量检索，按 id 去重合并后送本地 cross-encoder rerank，返回 top-K；并封装为 LangChain Tool。",
+      "tags": [
+        "rag",
+        "service",
+        "检索",
+        "rerank",
+        "api-handler"
+      ],
+      "complexity": "complex",
+      "languageNotes": "retrieve 用 Promise.all 并行触发 BM25 与 kNN 检索，getTool 把检索能力包装成 LLM 可调用的 LangChain tool。"
+    },
+    {
+      "id": "class:src/database/rag_retriever.ts:RAGRetriever",
+      "type": "class",
+      "name": "RAGRetriever",
+      "filePath": "src/database/rag_retriever.ts",
+      "lineRange": [
+        50,
+        217
+      ],
+      "summary": "单个 agent 的混合检索器类：管理表名、并行 bm25Search/knnSearch、merge 去重合并、retrieve 调 rerank 取 top-K，并通过 getTool 暴露为 LangChain Tool。",
+      "tags": [
+        "rag",
+        "service",
+        "检索",
+        "rerank",
+        "class"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:src/database/reranker.ts",
+      "type": "file",
+      "name": "reranker.ts",
+      "filePath": "src/database/reranker.ts",
+      "summary": "本地 cross-encoder 重排序模块：惰性加载 Xenova/bge-reranker-base，对 query-文档对打分并按 relevance 排序返回 top-N，失败时降级为原序返回。",
+      "tags": [
+        "rerank",
+        "service",
+        "cross-encoder",
+        "transformers",
+        "检索"
+      ],
+      "complexity": "moderate",
+      "languageNotes": "用 sigmoid 把模型 logits 归一化为 relevanceScore；rerank 的 catch 分支提供原序兜底，保证链路不中断。"
+    },
+    {
+      "id": "function:src/database/reranker.ts:loadReranker",
+      "type": "function",
+      "name": "loadReranker",
+      "filePath": "src/database/reranker.ts",
+      "lineRange": [
+        41,
+        71
+      ],
+      "summary": "惰性加载并缓存 cross-encoder reranker 的 tokenizer 与 sequence-classification 模型单例。",
+      "tags": [
+        "rerank",
+        "singleton",
+        "transformers",
+        "模型加载"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/database/reranker.ts:rerank",
+      "type": "function",
+      "name": "rerank",
+      "filePath": "src/database/reranker.ts",
+      "lineRange": [
+        85,
+        157
+      ],
+      "summary": "对一批文档相对 query 用本地 cross-encoder 打分（sigmoid 归一化），按分数排序取 top-N；模型出错时降级为原序返回前 N 条。",
+      "tags": [
+        "rerank",
+        "cross-encoder",
+        "检索",
+        "降级兜底"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:src/database/splitters.ts",
+      "type": "file",
+      "name": "splitters.ts",
+      "filePath": "src/database/splitters.ts",
+      "summary": "文档切块器：按文档 type 字段分别用 Markdown 标题切分或 recursive character 切分，splitDocs 作为按类型分组分发的统一入口。",
+      "tags": [
+        "切块",
+        "data-pipeline",
+        "factory",
+        "分发",
+        "文本处理"
+      ],
+      "complexity": "moderate",
+      "languageNotes": "splitDocs 先按 type 把文档分桶，再映射到对应 split 函数，对应 loaders 标注的文档类型。"
+    },
+    {
+      "id": "function:src/database/splitters.ts:splitWithRecursive",
+      "type": "function",
+      "name": "splitWithRecursive",
+      "filePath": "src/database/splitters.ts",
+      "lineRange": [
+        81,
+        105
+      ],
+      "summary": "用 RecursiveCharacterTextSplitter 对文档内容按字符递归切块，过短内容直接保留为单块。",
+      "tags": [
+        "切块",
+        "文本处理",
+        "工具函数"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/database/splitters.ts:splitDocs",
+      "type": "function",
+      "name": "splitDocs",
+      "filePath": "src/database/splitters.ts",
+      "lineRange": [
+        124,
+        152
+      ],
+      "summary": "切块总入口：按 type 字段把文档分桶，再分发到 json/markdown/pdf/docx/text 对应的切块函数并汇总结果。",
+      "tags": [
+        "切块",
+        "data-pipeline",
+        "factory",
+        "分发"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:src/utils/logger.ts",
+      "type": "file",
+      "name": "logger.ts",
+      "filePath": "src/utils/logger.ts",
+      "summary": "轻量彩色日志工具：基于 chalk 按等级着色、带时间戳，按 settings.logLevel 过滤；getLogger 返回带命名前缀的 logger 实例。",
+      "tags": [
+        "utility",
+        "日志",
+        "factory",
+        "工具函数"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/utils/logger.ts:getLogger",
+      "type": "function",
+      "name": "getLogger",
+      "filePath": "src/utils/logger.ts",
+      "lineRange": [
+        62,
+        85
+      ],
+      "summary": "工厂函数，按 name 前缀生成包含 info/warning/error 等方法的 logger 实例，输出按当前日志等级过滤。",
+      "tags": [
+        "utility",
+        "日志",
+        "factory"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:src/agents/architect.ts",
+      "type": "file",
+      "name": "architect.ts",
+      "filePath": "src/agents/architect.ts",
+      "summary": "架构师 / Tech Lead 角色 Agent，是整个多 Agent 讨论的入口和终止者，负责调度而非回答，通过 systemPrompt 约束自身只做派活、全员广播、闲聊收尾、需求分派四类动作。",
+      "tags": [
+        "agent",
+        "entry-point",
+        "orchestration",
+        "role-definition",
+        "system-prompt"
+      ],
+      "complexity": "simple",
+      "languageNotes": "继承 BaseAgent，仅覆写 systemPrompt getter，角色逻辑全部以中文 prompt 形式内联。"
+    },
+    {
+      "id": "class:src/agents/architect.ts:ArchitectAgent",
+      "type": "class",
+      "name": "ArchitectAgent",
+      "filePath": "src/agents/architect.ts",
+      "lineRange": [
+        8,
+        33
+      ],
+      "summary": "架构师角色 Agent 子类，构造时以 ARCHITECT 名注册，systemPrompt 定义其作为调度员的路由规则（点名派活、全员广播、闲聊收尾、需求分派）。",
+      "tags": [
+        "agent",
+        "orchestration",
+        "role-definition",
+        "entry-point"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/agents/backend.ts",
+      "type": "file",
+      "name": "backend.ts",
+      "filePath": "src/agents/backend.ts",
+      "summary": "后端工程师角色 Agent，继承 BaseAgent 并通过 systemPrompt 定义其在讨论中的后端视角职责。",
+      "tags": [
+        "agent",
+        "role-definition",
+        "system-prompt",
+        "backend"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/agents/backend.ts:BackendAgent",
+      "type": "class",
+      "name": "BackendAgent",
+      "filePath": "src/agents/backend.ts",
+      "lineRange": [
+        8,
+        22
+      ],
+      "summary": "后端工程师角色 Agent 子类，以 BACKEND 名注册，systemPrompt 约束其从后端技术视角参与讨论。",
+      "tags": [
+        "agent",
+        "role-definition",
+        "backend"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/agents/base.ts",
+      "type": "file",
+      "name": "base.ts",
+      "filePath": "src/agents/base.ts",
+      "summary": "全部角色 Agent 的抽象基类所在文件，定义 BaseAgent.invoke() 核心两阶段推理（工具循环 + 结构化收尾）、surrogate 字符清理 cleanBadChars、以及 LLM 输出强约束 schema ModelOutputSchema。",
+      "tags": [
+        "agent",
+        "base-class",
+        "rag",
+        "tool-calling",
+        "validation"
+      ],
+      "complexity": "complex",
+      "languageNotes": "invoke 分两阶段调 LLM：Phase 1 用 bindTools 跑有上限的 tool-call 循环，Phase 2 用 withStructuredOutput 按 zod schema 收尾，避免旧版 [NEXT_AGENT]/[DONE] 正则解析。"
+    },
+    {
+      "id": "function:src/agents/base.ts:cleanBadChars",
+      "type": "function",
+      "name": "cleanBadChars",
+      "filePath": "src/agents/base.ts",
+      "lineRange": [
+        37,
+        63
+      ],
+      "summary": "逐字符扫描字符串、剔除来自非 UTF-8 终端 stdin 的孤立 surrogate 码点，作为防止 httpx 编码崩溃的第二道防线。",
+      "tags": [
+        "utility",
+        "validation",
+        "sanitization",
+        "encoding"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:src/agents/base.ts:BaseAgent",
+      "type": "class",
+      "name": "BaseAgent",
+      "filePath": "src/agents/base.ts",
+      "lineRange": [
+        105,
+        329
+      ],
+      "summary": "所有角色 Agent 的抽象基类：构造时创建私有 RAGRetriever 与 ChatOpenAI 模型，核心 invoke() 先跑工具循环再做结构化收尾，_buildAgentResponse 解析 next_agent / done 决定路由，_userPrompt / _routingPrompt 拼装提示词。",
+      "tags": [
+        "agent",
+        "base-class",
+        "rag",
+        "tool-calling",
+        "orchestration"
+      ],
+      "complexity": "complex",
+      "languageNotes": "刻意保留 Python 端命名：实例上的 RAG 引用为大驼峰 this.RAGRetriever；主方法名 invoke 而非 process。"
+    },
+    {
+      "id": "file:src/agents/frontend.ts",
+      "type": "file",
+      "name": "frontend.ts",
+      "filePath": "src/agents/frontend.ts",
+      "summary": "前端工程师角色 Agent，继承 BaseAgent 并通过 systemPrompt 定义其在讨论中的前端视角职责。",
+      "tags": [
+        "agent",
+        "role-definition",
+        "system-prompt",
+        "frontend"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/agents/frontend.ts:FrontendAgent",
+      "type": "class",
+      "name": "FrontendAgent",
+      "filePath": "src/agents/frontend.ts",
+      "lineRange": [
+        8,
+        22
+      ],
+      "summary": "前端工程师角色 Agent 子类，以 FRONTEND 名注册，systemPrompt 约束其从前端技术视角参与讨论。",
+      "tags": [
+        "agent",
+        "role-definition",
+        "frontend"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/agents/pm.ts",
+      "type": "file",
+      "name": "pm.ts",
+      "filePath": "src/agents/pm.ts",
+      "summary": "产品经理角色 Agent，继承 BaseAgent 并通过 systemPrompt 定义其在讨论中的产品视角职责。",
+      "tags": [
+        "agent",
+        "role-definition",
+        "system-prompt",
+        "product"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/agents/pm.ts:PMAgent",
+      "type": "class",
+      "name": "PMAgent",
+      "filePath": "src/agents/pm.ts",
+      "lineRange": [
+        8,
+        22
+      ],
+      "summary": "产品经理角色 Agent 子类，以 PM 名注册，systemPrompt 约束其从产品视角参与讨论。",
+      "tags": [
+        "agent",
+        "role-definition",
+        "product"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/agents/tester.ts",
+      "type": "file",
+      "name": "tester.ts",
+      "filePath": "src/agents/tester.ts",
+      "summary": "测试工程师角色 Agent，继承 BaseAgent 并通过 systemPrompt 定义其在讨论中的测试视角职责。",
+      "tags": [
+        "agent",
+        "role-definition",
+        "system-prompt",
+        "testing"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/agents/tester.ts:TesterAgent",
+      "type": "class",
+      "name": "TesterAgent",
+      "filePath": "src/agents/tester.ts",
+      "lineRange": [
+        8,
+        22
+      ],
+      "summary": "测试工程师角色 Agent 子类，以 TESTER 名注册，systemPrompt 约束其从测试视角参与讨论。",
+      "tags": [
+        "agent",
+        "role-definition",
+        "testing"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/config/constants.ts",
+      "type": "file",
+      "name": "constants.ts",
+      "filePath": "src/config/constants.ts",
+      "summary": "集中定义 5 个角色 Agent 的名字常量、AGENT_NAMES 枚举、NON_ARCHITECT_AGENTS 列表、ROLE_DESCRIPTIONS 角色描述映射，以及 isAgentName 类型守卫，供整个 agents/graph 层共享。",
+      "tags": [
+        "config",
+        "constants",
+        "type-definition",
+        "enum"
+      ],
+      "complexity": "simple",
+      "languageNotes": "AGENT_NAMES 用 as const 元组 + isAgentName 类型守卫，实现编译期角色名穷举与运行期校验。"
+    },
+    {
+      "id": "function:src/config/constants.ts:isAgentName",
+      "type": "function",
+      "name": "isAgentName",
+      "filePath": "src/config/constants.ts",
+      "lineRange": [
+        26,
+        28
+      ],
+      "summary": "类型守卫，判断任意字符串是否属于合法的 AGENT_NAMES 集合，用于路由时校验 LLM 给出的 next_agent。",
+      "tags": [
+        "validation",
+        "type-guard",
+        "utility"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/graph/builder.ts",
+      "type": "file",
+      "name": "builder.ts",
+      "filePath": "src/graph/builder.ts",
+      "summary": "LangGraph 编排核心：实例化全部 5 个角色 Agent，为每个 Agent 包装成 StateGraph 节点（createNode），用 architect 作入口、其余节点经 routeToWhichAgent 条件边自由路由，最终 compile 出可 stream 的图。",
+      "tags": [
+        "orchestration",
+        "langgraph",
+        "graph-builder",
+        "entry-point",
+        "state-machine"
+      ],
+      "complexity": "moderate",
+      "languageNotes": "用 addConditionalEdges 把共用的 routeToWhichAgent 挂到各节点，实现非架构师角色在条件边驱动下的自由路由。"
+    },
+    {
+      "id": "function:src/graph/builder.ts:buildAllAgents",
+      "type": "function",
+      "name": "buildAllAgents",
+      "filePath": "src/graph/builder.ts",
+      "lineRange": [
+        38,
+        46
+      ],
+      "summary": "实例化并返回全部 5 个角色 Agent（架构师、后端、前端、测试、产品经理），供图构建时逐一接入节点。",
+      "tags": [
+        "factory",
+        "orchestration",
+        "agent"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/graph/builder.ts:formatHistory",
+      "type": "function",
+      "name": "formatHistory",
+      "filePath": "src/graph/builder.ts",
+      "lineRange": [
+        48,
+        57
+      ],
+      "summary": "把 State 中累积的消息列表格式化为给 Agent 阅读的讨论历史文本块。",
+      "tags": [
+        "formatting",
+        "utility",
+        "orchestration"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/graph/builder.ts:createNode",
+      "type": "function",
+      "name": "createNode",
+      "filePath": "src/graph/builder.ts",
+      "lineRange": [
+        59,
+        91
+      ],
+      "summary": "为单个 Agent 生成 LangGraph 节点函数：格式化历史、调用 agent.invoke()、打印输出，并返回增量 State 更新（消息追加、next_agent、done 等）。",
+      "tags": [
+        "factory",
+        "orchestration",
+        "langgraph",
+        "node"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/graph/builder.ts:buildGraph",
+      "type": "function",
+      "name": "buildGraph",
+      "filePath": "src/graph/builder.ts",
+      "lineRange": [
+        96,
+        141
+      ],
+      "summary": "组装并编译整张 StateGraph：把每个 Agent 注册为节点、设 architect 为入口、为各节点挂上 routeToWhichAgent 条件边，返回可 stream 的已编译图。",
+      "tags": [
+        "orchestration",
+        "langgraph",
+        "graph-builder",
+        "entry-point"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:src/utils/formatting.ts",
+      "type": "file",
+      "name": "formatting.ts",
+      "filePath": "src/utils/formatting.ts",
+      "summary": "CLI 终端美化输出工具集，基于 boxen / chalk / cli-table3，提供分隔线、Agent 消息框、系统提示、横幅、消息表格及按角色着色等打印函数。",
+      "tags": [
+        "utility",
+        "cli",
+        "formatting",
+        "presentation"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/utils/formatting.ts:formatSeparator",
+      "type": "function",
+      "name": "formatSeparator",
+      "filePath": "src/utils/formatting.ts",
+      "lineRange": [
+        33,
+        41
+      ],
+      "summary": "生成带居中标题的固定宽度分隔线字符串，用于 CLI 段落分割。",
+      "tags": [
+        "utility",
+        "cli",
+        "formatting"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/utils/formatting.ts:printAgentInfo",
+      "type": "function",
+      "name": "printAgentInfo",
+      "filePath": "src/utils/formatting.ts",
+      "lineRange": [
+        53,
+        81
+      ],
+      "summary": "把单个 Agent 的发言渲染成带角色着色边框的 boxen 信息框并打印，含正文与路由 / RAG 状态页脚。",
+      "tags": [
+        "utility",
+        "cli",
+        "formatting",
+        "presentation"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/utils/formatting.ts:printSystem",
+      "type": "function",
+      "name": "printSystem",
+      "filePath": "src/utils/formatting.ts",
+      "lineRange": [
+        86,
+        89
+      ],
+      "summary": "以蓝底白字高亮样式打印一条系统级提示信息。",
+      "tags": [
+        "utility",
+        "cli",
+        "formatting"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/utils/formatting.ts:printBanner",
+      "type": "function",
+      "name": "printBanner",
+      "filePath": "src/utils/formatting.ts",
+      "lineRange": [
+        94,
+        104
+      ],
+      "summary": "打印程序启动横幅，含标题与副标题的居中 boxen 框。",
+      "tags": [
+        "utility",
+        "cli",
+        "formatting",
+        "presentation"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/utils/formatting.ts:printMessagesTable",
+      "type": "function",
+      "name": "printMessagesTable",
+      "filePath": "src/utils/formatting.ts",
+      "lineRange": [
+        109,
+        131
+      ],
+      "summary": "用 cli-table3 把整轮讨论的消息记录渲染成带表头的表格并打印，供复盘查看。",
+      "tags": [
+        "utility",
+        "cli",
+        "formatting",
+        "presentation"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/utils/formatting.ts:colorize",
+      "type": "function",
+      "name": "colorize",
+      "filePath": "src/utils/formatting.ts",
+      "lineRange": [
+        136,
+        151
+      ],
+      "summary": "根据角色名返回对应的 chalk 着色函数，为不同 Agent 的输出赋予一致的配色。",
+      "tags": [
+        "utility",
+        "cli",
+        "formatting"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/cli/main.ts",
+      "type": "file",
+      "name": "main.ts",
+      "filePath": "src/cli/main.ts",
+      "summary": "CLI 的真正入口：打印 banner、执行 bootstrap（ping 数据库、预热 embedding 模型、初始化 5 个 Agent 的 PostgreSQL 表），构建 LangGraph，然后在 REPL 循环里读取用户需求并调用 graph.stream() 驱动多 Agent 讨论。",
+      "tags": [
+        "entry-point",
+        "cli",
+        "repl",
+        "bootstrap",
+        "orchestration"
+      ],
+      "complexity": "complex",
+      "languageNotes": "顶层使用 async main + 动态 readline.question 的异步 REPL；用 ora spinner 和 chalk 着色输出，graph.stream() 以异步迭代器逐步消费节点输出。"
+    },
+    {
+      "id": "function:src/cli/main.ts:main",
+      "type": "function",
+      "name": "main",
+      "filePath": "src/cli/main.ts",
+      "lineRange": [
+        251,
+        301
+      ],
+      "summary": "CLI 主入口函数：依次执行 printAppBanner、bootstrap、buildGraph，随后进入 readline REPL 循环——读取需求、识别退出/查看指令，调用 runOneDiscussion 并打印每轮复盘。",
+      "tags": [
+        "entry-point",
+        "repl",
+        "event-loop",
+        "cli"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/cli/main.ts:bootstrap",
+      "type": "function",
+      "name": "bootstrap",
+      "filePath": "src/cli/main.ts",
+      "lineRange": [
+        63,
+        176
+      ],
+      "summary": "启动期初始化：配置日志、打印关键设置、ping PostgreSQL（失败即 process.exit），扫描种子目录，预热 embedding 模型并初始化 5 个 Agent 的向量表，最后统计已灌入文档数。",
+      "tags": [
+        "bootstrap",
+        "initialization",
+        "database",
+        "validation"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/cli/main.ts:runOneDiscussion",
+      "type": "function",
+      "name": "runOneDiscussion",
+      "filePath": "src/cli/main.ts",
+      "lineRange": [
+        178,
+        210
+      ],
+      "summary": "驱动一轮多 Agent 讨论：以给定 requirement 调用 graph.stream()，异步迭代消费各节点输出并打印分隔符与发言信息，返回最终状态。",
+      "tags": [
+        "orchestration",
+        "stream",
+        "graph-execution"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/cli/main.ts:printFinalState",
+      "type": "function",
+      "name": "printFinalState",
+      "filePath": "src/cli/main.ts",
+      "lineRange": [
+        225,
+        247
+      ],
+      "summary": "汇总并以表格形式打印讨论的最终状态，截断过长的消息内容后交由 printMessagesTable 渲染发言记录。",
+      "tags": [
+        "output",
+        "formatting",
+        "cli"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/cli/main.ts:printAppBanner",
+      "type": "function",
+      "name": "printAppBanner",
+      "filePath": "src/cli/main.ts",
+      "lineRange": [
+        41,
+        52
+      ],
+      "summary": "打印应用启动 banner，遍历 ROLE_DESCRIPTIONS 用 chalk 着色列出 5 个角色 Agent 的简介。",
+      "tags": [
+        "output",
+        "cli",
+        "banner"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/cli/main.ts:printRoundReview",
+      "type": "function",
+      "name": "printRoundReview",
+      "filePath": "src/cli/main.ts",
+      "lineRange": [
+        212,
+        223
+      ],
+      "summary": "一轮讨论结束后打印复盘提示，根据 state.done 用绿色/黄色着色区分讨论是否完成。",
+      "tags": [
+        "output",
+        "cli",
+        "review"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/graph/route.ts",
+      "type": "file",
+      "name": "route.ts",
+      "filePath": "src/graph/route.ts",
+      "summary": "定义 routeToWhichAgent——所有图节点共用的 LangGraph 条件边函数，按优先级（iteration 上限 → done → next_agent 合法 → 兜底回架构师）决定下一节点。",
+      "tags": [
+        "routing",
+        "conditional-edge",
+        "graph",
+        "control-flow"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/graph/route.ts:routeToWhichAgent",
+      "type": "function",
+      "name": "routeToWhichAgent",
+      "filePath": "src/graph/route.ts",
+      "lineRange": [
+        23,
+        45
+      ],
+      "summary": "LangGraph 条件边函数：依据共享状态按 iteration >= max_iterations → done → next_agent 是否为合法 AGENT_NAMES → 兜底 architect 的优先级返回下一节点名，确保图永不卡死。",
+      "tags": [
+        "routing",
+        "conditional-edge",
+        "control-flow"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/graph/state.ts",
+      "type": "file",
+      "name": "state.ts",
+      "filePath": "src/graph/state.ts",
+      "summary": "定义 LangGraph 的共享状态 AgentStateAnnotation：messages 走追加 reducer，requirement/next_agent/done/iteration 等字段直接覆盖；并导出 MessageTurn 与 AgentState 类型。",
+      "tags": [
+        "data-model",
+        "type-definition",
+        "state",
+        "graph"
+      ],
+      "complexity": "simple",
+      "languageNotes": "用 @langchain/langgraph 的 Annotation.Root 声明带 reducer 与 default 的状态 schema；字段名刻意保持 snake_case 以兼容 Python 端序列化。"
+    },
+    {
+      "id": "file:src/index.ts",
+      "type": "file",
+      "name": "index.ts",
+      "filePath": "src/index.ts",
+      "summary": "进程入口的薄壳：加载 .env 环境变量后再导入并启动 cli/main，保证配置在任何模块求值前就绪。",
+      "tags": [
+        "entry-point",
+        "bootstrap"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:.env.example",
+      "type": "config",
+      "name": ".env.example",
+      "filePath": ".env.example",
+      "summary": "环境变量模板，声明 LLM（API_KEY/BASE_URL/MODEL_NAME）、PostgreSQL（PG_URL/PG_TABLE_PREFIX）、本地 embedding 与 rerank 模型，以及 RAG 召回/重排数量（RETRIEVE_TOP_N/RERANK_TOP_N）等运行期配置。",
+      "tags": [
+        "configuration",
+        "environment",
+        "rag",
+        "database"
+      ],
+      "complexity": "simple",
+      "languageNotes": "纯 KEY=value 形式的 dotenv 模板，含 LangSmith tracing 可选项。"
+    },
+    {
+      "id": "document:CLAUDE.md",
+      "type": "document",
+      "name": "CLAUDE.md",
+      "filePath": "CLAUDE.md",
+      "summary": "面向 Claude Code 的项目指引文档，涵盖项目概述、常用命令、三层架构（agents/graph/database）、刻意保留的命名习惯、易踩的坑与编码风格约束。",
+      "tags": [
+        "documentation",
+        "agent-instructions",
+        "architecture",
+        "conventions"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "document:README.md",
+      "type": "document",
+      "name": "README.md",
+      "filePath": "README.md",
+      "summary": "项目总览文档，介绍多 Agent RAG 协作系统、RAG 检索链路、项目结构、快速开始（安装/启动 pgvector/配置 .env/运行）以及关键技术决策。",
+      "tags": [
+        "documentation",
+        "entry-point",
+        "overview",
+        "getting-started"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "service:docker-compose.yml",
+      "type": "service",
+      "name": "docker-compose.yml",
+      "filePath": "docker-compose.yml",
+      "summary": "Docker Compose 编排单节点 pgvector/pgvector:pg17 PostgreSQL，作为 RAG 的向量存储与混合检索后端，宿主机映射到 5433 端口并配健康检查。",
+      "tags": [
+        "orchestration",
+        "infrastructure",
+        "database",
+        "pgvector"
+      ],
+      "complexity": "simple",
+      "languageNotes": "使用 pgvector 官方镜像使向量 kNN 与 pg_trgm 关键字召回开箱即用；端口映射到 5433 以避让本机原生 postgres。"
+    },
+    {
+      "id": "service:docker-compose.yml:postgres",
+      "type": "service",
+      "name": "postgres",
+      "filePath": "docker-compose.yml",
+      "summary": "Compose 服务定义：基于 pgvector/pgvector:pg17 的 PostgreSQL 容器（meetmind-pg），持久化数据卷 pg_data，含 pg_isready 健康检查。",
+      "tags": [
+        "containerization",
+        "database",
+        "pgvector",
+        "infrastructure"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:package.json",
+      "type": "config",
+      "name": "package.json",
+      "filePath": "package.json",
+      "summary": "Node ESM 项目清单，声明 LangChain/LangGraph、@huggingface/transformers、pg、cohere-ai、zod 等依赖，并提供 tsx/tsc 驱动的 dev/start/build/typecheck 脚本。",
+      "tags": [
+        "configuration",
+        "build-system",
+        "dependencies",
+        "npm"
+      ],
+      "complexity": "simple",
+      "languageNotes": "type=module 的 ESM 工程，开发态用 tsx 直接跑 src/index.ts，生产态先 tsc 构建到 dist 再 node 运行。"
+    },
+    {
+      "id": "config:pnpm-workspace.yaml",
+      "type": "config",
+      "name": "pnpm-workspace.yaml",
+      "filePath": "pnpm-workspace.yaml",
+      "summary": "pnpm 工作区配置，通过 allowBuilds 显式放行需要执行构建脚本的原生依赖。",
+      "tags": [
+        "configuration",
+        "pnpm",
+        "workspace",
+        "build-system"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "document:project_flow.md",
+      "type": "document",
+      "name": "project_flow.md",
+      "filePath": "project_flow.md",
+      "summary": "TypeScript 版项目调用流程文档，自顶向下追踪从入口、CLI main()、bootstrap 初始化、图编译、单轮讨论、Agent 推理、RAG 检索到路由决策的完整调用链与依赖关系。",
+      "tags": [
+        "documentation",
+        "call-flow",
+        "architecture",
+        "reference"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "config:tsconfig.json",
+      "type": "config",
+      "name": "tsconfig.json",
+      "filePath": "tsconfig.json",
+      "summary": "TypeScript 编译配置，采用 NodeNext 模块解析（故 TS 源码 import 带 .js 后缀），编译 src 目录并排除产物目录。",
+      "tags": [
+        "configuration",
+        "typescript",
+        "build-system",
+        "nodenext"
+      ],
+      "complexity": "simple",
+      "languageNotes": "NodeNext module resolution 要求相对导入显式带扩展名，这是源码中 .js 后缀的根因。"
+    },
+    {
+      "id": "config:.npmrc",
+      "type": "config",
+      "name": ".npmrc",
+      "filePath": ".npmrc",
+      "summary": "npm/pnpm 客户端配置：锁定官方 registry 并加大 fetch 重试次数与超时阈值，缓解依赖安装时的网络波动（torch 等大包尤甚）。",
+      "tags": [
+        "configuration",
+        "build-system",
+        "pnpm",
+        "dependency-management"
+      ],
+      "complexity": "simple",
+      "languageNotes": "纯 key=value 形式的 ini 配置；fetch-retries / fetch-timeout 系列参数主要为大体积依赖的健壮下载服务。"
+    },
+    {
+      "id": "config:data/seed/architect/seeds.json",
+      "type": "config",
+      "name": "architect/seeds.json",
+      "filePath": "data/seed/architect/seeds.json",
+      "summary": "架构师角色的 RAG 种子知识库：6 条 {content, type, date} 文档，覆盖整体架构决策、技术选型、协作规范、架构约束与技术债，bootstrap 时被切块、embedding 后写入架构师专属的 PostgreSQL 向量表。",
+      "tags": [
+        "data",
+        "rag",
+        "seed",
+        "embedding",
+        "knowledge-base"
+      ],
+      "complexity": "simple",
+      "languageNotes": "JSON 数组结构，每条记录含 content/type/date 三字段；type 用于 splitter 二次切块的分类。"
+    },
+    {
+      "id": "config:data/seed/backend/seeds.json",
+      "type": "config",
+      "name": "backend/seeds.json",
+      "filePath": "data/seed/backend/seeds.json",
+      "summary": "后端角色的 RAG 种子知识库：6 条 {content, type, date} 文档，覆盖项目目录结构、认证实现、连接池配置、性能优化与通用响应封装等工程实践，供后端 Agent 检索引用。",
+      "tags": [
+        "data",
+        "rag",
+        "seed",
+        "embedding",
+        "knowledge-base"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:data/seed/frontend/seeds.json",
+      "type": "config",
+      "name": "frontend/seeds.json",
+      "filePath": "data/seed/frontend/seeds.json",
+      "summary": "前端角色的 RAG 种子知识库：与其它角色同构的 {content, type, date} 文档数组，承载前端技术栈、UI/交互与组件约定等知识，bootstrap 时灌入前端 Agent 专属的向量表。",
+      "tags": [
+        "data",
+        "rag",
+        "seed",
+        "embedding",
+        "knowledge-base"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:data/seed/pm/seeds.json",
+      "type": "config",
+      "name": "pm/seeds.json",
+      "filePath": "data/seed/pm/seeds.json",
+      "summary": "产品经理角色的 RAG 种子知识库：同构的 {content, type, date} 文档数组，承载需求澄清、优先级排序与产品规划相关知识，供 PM Agent 检索使用。",
+      "tags": [
+        "data",
+        "rag",
+        "seed",
+        "embedding",
+        "knowledge-base"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:data/seed/tester/seeds.json",
+      "type": "config",
+      "name": "tester/seeds.json",
+      "filePath": "data/seed/tester/seeds.json",
+      "summary": "测试角色的 RAG 种子知识库：同构的 {content, type, date} 文档数组，承载自动化用例、回归策略与测试覆盖经验，bootstrap 时灌入测试 Agent 专属的向量表。",
+      "tags": [
+        "data",
+        "rag",
+        "seed",
+        "embedding",
+        "knowledge-base"
+      ],
+      "complexity": "simple"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:src/config/settings.ts",
+      "target": "function:src/config/settings.ts:getSettings",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/config/settings.ts",
+      "target": "function:src/config/settings.ts:getSettings",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/database/client.ts",
+      "target": "file:src/config/settings.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/database/client.ts",
+      "target": "file:src/database/constants.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/database/client.ts",
+      "target": "file:src/database/embedding.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/database/client.ts",
+      "target": "file:src/utils/logger.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/database/client.ts",
+      "target": "function:src/database/client.ts:getPgPool",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/database/client.ts",
+      "target": "function:src/database/client.ts:getPgPool",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/database/client.ts",
+      "target": "function:src/database/client.ts:ensureAgentTable",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/database/client.ts",
+      "target": "function:src/database/client.ts:ensureAgentTable",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/database/client.ts",
+      "target": "function:src/database/client.ts:countDocs",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/database/client.ts",
+      "target": "function:src/database/client.ts:countDocs",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:src/database/client.ts:getPgPool",
+      "target": "function:src/config/settings.ts:getSettings",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:src/database/client.ts:ensureAgentTable",
+      "target": "function:src/database/client.ts:getPgPool",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/database/constants.ts",
+      "target": "file:src/config/settings.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/database/embedding.ts",
+      "target": "file:src/config/settings.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/database/embedding.ts",
+      "target": "file:src/utils/logger.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/database/embedding.ts",
+      "target": "function:src/database/embedding.ts:getEmbedderModel",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/database/embedding.ts",
+      "target": "function:src/database/embedding.ts:getEmbedderModel",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/database/embedding.ts",
+      "target": "function:src/database/embedding.ts:embedBatch",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/database/embedding.ts",
+      "target": "function:src/database/embedding.ts:embedBatch",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:src/database/embedding.ts:getEmbedderModel",
+      "target": "function:src/config/settings.ts:getSettings",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:src/database/embedding.ts:embedBatch",
+      "target": "function:src/database/embedding.ts:getEmbedderModel",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/database/initializer.ts",
+      "target": "file:src/config/constants.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/database/initializer.ts",
+      "target": "file:src/config/settings.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/database/initializer.ts",
+      "target": "file:src/database/client.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/database/initializer.ts",
+      "target": "file:src/database/embedding.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/database/initializer.ts",
+      "target": "file:src/database/loaders.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/database/initializer.ts",
+      "target": "file:src/database/splitters.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/database/initializer.ts",
+      "target": "file:src/utils/logger.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/database/initializer.ts",
+      "target": "function:src/database/initializer.ts:getSeedsContent",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/database/initializer.ts",
+      "target": "function:src/database/initializer.ts:loadSeedsToPg",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/database/initializer.ts",
+      "target": "function:src/database/initializer.ts:loadSeedsToPg",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/database/initializer.ts",
+      "target": "function:src/database/initializer.ts:buildAgentsIndices",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/database/initializer.ts",
+      "target": "function:src/database/initializer.ts:buildAgentsIndices",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/database/initializer.ts",
+      "target": "function:src/database/initializer.ts:resetAgentDb",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/database/initializer.ts",
+      "target": "function:src/database/initializer.ts:resetAgentDb",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:src/database/initializer.ts:getSeedsContent",
+      "target": "function:src/database/loaders.ts:loadFile",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:src/database/initializer.ts:loadSeedsToPg",
+      "target": "function:src/database/initializer.ts:getSeedsContent",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:src/database/initializer.ts:loadSeedsToPg",
+      "target": "function:src/database/splitters.ts:splitDocs",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:src/database/initializer.ts:loadSeedsToPg",
+      "target": "function:src/database/client.ts:ensureAgentTable",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:src/database/initializer.ts:loadSeedsToPg",
+      "target": "function:src/database/embedding.ts:embedBatch",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:src/database/initializer.ts:loadSeedsToPg",
+      "target": "function:src/database/client.ts:getPgPool",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:src/database/initializer.ts:buildAgentsIndices",
+      "target": "function:src/database/initializer.ts:loadSeedsToPg",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:src/database/initializer.ts:resetAgentDb",
+      "target": "function:src/database/initializer.ts:loadSeedsToPg",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/database/loaders.ts",
+      "target": "file:src/utils/logger.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/database/loaders.ts",
+      "target": "function:src/database/loaders.ts:loadJson",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/database/loaders.ts",
+      "target": "function:src/database/loaders.ts:loadJson",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/database/loaders.ts",
+      "target": "function:src/database/loaders.ts:loadMarkdown",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/database/loaders.ts",
+      "target": "function:src/database/loaders.ts:loadMarkdown",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/database/loaders.ts",
+      "target": "function:src/database/loaders.ts:loadPdf",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/database/loaders.ts",
+      "target": "function:src/database/loaders.ts:loadPdf",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/database/loaders.ts",
+      "target": "function:src/database/loaders.ts:loadFile",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/database/loaders.ts",
+      "target": "function:src/database/loaders.ts:loadFile",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:src/database/loaders.ts:loadFile",
+      "target": "function:src/database/loaders.ts:loadJson",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:src/database/loaders.ts:loadFile",
+      "target": "function:src/database/loaders.ts:loadMarkdown",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:src/database/loaders.ts:loadFile",
+      "target": "function:src/database/loaders.ts:loadPdf",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/database/rag_retriever.ts",
+      "target": "file:src/config/settings.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/database/rag_retriever.ts",
+      "target": "file:src/database/client.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/database/rag_retriever.ts",
+      "target": "file:src/database/embedding.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/database/rag_retriever.ts",
+      "target": "file:src/database/reranker.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/database/rag_retriever.ts",
+      "target": "file:src/utils/logger.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/database/rag_retriever.ts",
+      "target": "class:src/database/rag_retriever.ts:RAGRetriever",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/database/rag_retriever.ts",
+      "target": "class:src/database/rag_retriever.ts:RAGRetriever",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "class:src/database/rag_retriever.ts:RAGRetriever",
+      "target": "function:src/database/client.ts:ensureAgentTable",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "class:src/database/rag_retriever.ts:RAGRetriever",
+      "target": "function:src/database/client.ts:getPgPool",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "class:src/database/rag_retriever.ts:RAGRetriever",
+      "target": "function:src/database/reranker.ts:rerank",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "class:src/database/rag_retriever.ts:RAGRetriever",
+      "target": "function:src/config/settings.ts:getSettings",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/database/reranker.ts",
+      "target": "file:src/config/settings.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/database/reranker.ts",
+      "target": "file:src/utils/logger.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/database/reranker.ts",
+      "target": "function:src/database/reranker.ts:loadReranker",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/database/reranker.ts",
+      "target": "function:src/database/reranker.ts:rerank",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/database/reranker.ts",
+      "target": "function:src/database/reranker.ts:rerank",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:src/database/reranker.ts:rerank",
+      "target": "function:src/database/reranker.ts:loadReranker",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:src/database/reranker.ts:rerank",
+      "target": "function:src/config/settings.ts:getSettings",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:src/database/reranker.ts:loadReranker",
+      "target": "function:src/config/settings.ts:getSettings",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/database/splitters.ts",
+      "target": "file:src/database/loaders.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/database/splitters.ts",
+      "target": "file:src/utils/logger.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/database/splitters.ts",
+      "target": "function:src/database/splitters.ts:splitWithRecursive",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/database/splitters.ts",
+      "target": "function:src/database/splitters.ts:splitDocs",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/database/splitters.ts",
+      "target": "function:src/database/splitters.ts:splitDocs",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:src/database/splitters.ts:splitDocs",
+      "target": "function:src/database/splitters.ts:splitWithRecursive",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/utils/logger.ts",
+      "target": "file:src/config/settings.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/utils/logger.ts",
+      "target": "function:src/utils/logger.ts:getLogger",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/utils/logger.ts",
+      "target": "function:src/utils/logger.ts:getLogger",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:src/utils/logger.ts:getLogger",
+      "target": "function:src/config/settings.ts:getSettings",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/agents/architect.ts",
+      "target": "file:src/agents/base.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/agents/architect.ts",
+      "target": "file:src/config/constants.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/agents/architect.ts",
+      "target": "class:src/agents/architect.ts:ArchitectAgent",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/agents/architect.ts",
+      "target": "class:src/agents/architect.ts:ArchitectAgent",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "class:src/agents/architect.ts:ArchitectAgent",
+      "target": "class:src/agents/base.ts:BaseAgent",
+      "type": "inherits",
+      "direction": "forward",
+      "weight": 0.9
+    },
+    {
+      "source": "file:src/agents/backend.ts",
+      "target": "file:src/agents/base.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/agents/backend.ts",
+      "target": "file:src/config/constants.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/agents/backend.ts",
+      "target": "class:src/agents/backend.ts:BackendAgent",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/agents/backend.ts",
+      "target": "class:src/agents/backend.ts:BackendAgent",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "class:src/agents/backend.ts:BackendAgent",
+      "target": "class:src/agents/base.ts:BaseAgent",
+      "type": "inherits",
+      "direction": "forward",
+      "weight": 0.9
+    },
+    {
+      "source": "file:src/agents/base.ts",
+      "target": "file:src/config/constants.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/agents/base.ts",
+      "target": "file:src/config/settings.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/agents/base.ts",
+      "target": "file:src/database/rag_retriever.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/agents/base.ts",
+      "target": "file:src/utils/logger.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/agents/base.ts",
+      "target": "function:src/agents/base.ts:cleanBadChars",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/agents/base.ts",
+      "target": "function:src/agents/base.ts:cleanBadChars",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/agents/base.ts",
+      "target": "class:src/agents/base.ts:BaseAgent",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "class:src/agents/base.ts:BaseAgent",
+      "target": "class:src/database/rag_retriever.ts:RAGRetriever",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "class:src/agents/base.ts:BaseAgent",
+      "target": "function:src/config/settings.ts:getSettings",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "class:src/agents/base.ts:BaseAgent",
+      "target": "function:src/config/constants.ts:isAgentName",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/agents/frontend.ts",
+      "target": "file:src/agents/base.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/agents/frontend.ts",
+      "target": "file:src/config/constants.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/agents/frontend.ts",
+      "target": "class:src/agents/frontend.ts:FrontendAgent",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/agents/frontend.ts",
+      "target": "class:src/agents/frontend.ts:FrontendAgent",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "class:src/agents/frontend.ts:FrontendAgent",
+      "target": "class:src/agents/base.ts:BaseAgent",
+      "type": "inherits",
+      "direction": "forward",
+      "weight": 0.9
+    },
+    {
+      "source": "file:src/agents/pm.ts",
+      "target": "file:src/agents/base.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/agents/pm.ts",
+      "target": "file:src/config/constants.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/agents/pm.ts",
+      "target": "class:src/agents/pm.ts:PMAgent",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/agents/pm.ts",
+      "target": "class:src/agents/pm.ts:PMAgent",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "class:src/agents/pm.ts:PMAgent",
+      "target": "class:src/agents/base.ts:BaseAgent",
+      "type": "inherits",
+      "direction": "forward",
+      "weight": 0.9
+    },
+    {
+      "source": "file:src/agents/tester.ts",
+      "target": "file:src/agents/base.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/agents/tester.ts",
+      "target": "file:src/config/constants.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/agents/tester.ts",
+      "target": "class:src/agents/tester.ts:TesterAgent",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/agents/tester.ts",
+      "target": "class:src/agents/tester.ts:TesterAgent",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "class:src/agents/tester.ts:TesterAgent",
+      "target": "class:src/agents/base.ts:BaseAgent",
+      "type": "inherits",
+      "direction": "forward",
+      "weight": 0.9
+    },
+    {
+      "source": "file:src/config/constants.ts",
+      "target": "function:src/config/constants.ts:isAgentName",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/config/constants.ts",
+      "target": "function:src/config/constants.ts:isAgentName",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/graph/builder.ts",
+      "target": "file:src/agents/architect.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/graph/builder.ts",
+      "target": "file:src/agents/backend.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/graph/builder.ts",
+      "target": "file:src/agents/base.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/graph/builder.ts",
+      "target": "file:src/agents/frontend.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/graph/builder.ts",
+      "target": "file:src/agents/pm.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/graph/builder.ts",
+      "target": "file:src/agents/tester.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/graph/builder.ts",
+      "target": "file:src/config/constants.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/graph/builder.ts",
+      "target": "file:src/graph/route.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/graph/builder.ts",
+      "target": "file:src/graph/state.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/graph/builder.ts",
+      "target": "file:src/utils/formatting.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/graph/builder.ts",
+      "target": "file:src/utils/logger.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/graph/builder.ts",
+      "target": "function:src/graph/builder.ts:buildAllAgents",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/graph/builder.ts",
+      "target": "function:src/graph/builder.ts:formatHistory",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/graph/builder.ts",
+      "target": "function:src/graph/builder.ts:createNode",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/graph/builder.ts",
+      "target": "function:src/graph/builder.ts:buildGraph",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/graph/builder.ts",
+      "target": "function:src/graph/builder.ts:buildGraph",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:src/graph/builder.ts:buildAllAgents",
+      "target": "class:src/agents/architect.ts:ArchitectAgent",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:src/graph/builder.ts:buildAllAgents",
+      "target": "class:src/agents/backend.ts:BackendAgent",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:src/graph/builder.ts:buildAllAgents",
+      "target": "class:src/agents/frontend.ts:FrontendAgent",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:src/graph/builder.ts:buildAllAgents",
+      "target": "class:src/agents/pm.ts:PMAgent",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:src/graph/builder.ts:buildAllAgents",
+      "target": "class:src/agents/tester.ts:TesterAgent",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:src/graph/builder.ts:createNode",
+      "target": "function:src/utils/formatting.ts:printAgentInfo",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:src/graph/builder.ts:createNode",
+      "target": "function:src/graph/builder.ts:formatHistory",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:src/graph/builder.ts:buildGraph",
+      "target": "function:src/graph/builder.ts:buildAllAgents",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:src/graph/builder.ts:buildGraph",
+      "target": "function:src/graph/builder.ts:createNode",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:src/graph/builder.ts:buildGraph",
+      "target": "function:src/graph/route.ts:routeToWhichAgent",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/utils/formatting.ts",
+      "target": "file:src/config/constants.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/utils/formatting.ts",
+      "target": "function:src/utils/formatting.ts:formatSeparator",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/utils/formatting.ts",
+      "target": "function:src/utils/formatting.ts:formatSeparator",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/utils/formatting.ts",
+      "target": "function:src/utils/formatting.ts:printAgentInfo",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/utils/formatting.ts",
+      "target": "function:src/utils/formatting.ts:printAgentInfo",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/utils/formatting.ts",
+      "target": "function:src/utils/formatting.ts:printSystem",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/utils/formatting.ts",
+      "target": "function:src/utils/formatting.ts:printSystem",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/utils/formatting.ts",
+      "target": "function:src/utils/formatting.ts:printBanner",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/utils/formatting.ts",
+      "target": "function:src/utils/formatting.ts:printBanner",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/utils/formatting.ts",
+      "target": "function:src/utils/formatting.ts:printMessagesTable",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/utils/formatting.ts",
+      "target": "function:src/utils/formatting.ts:printMessagesTable",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/utils/formatting.ts",
+      "target": "function:src/utils/formatting.ts:colorize",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/utils/formatting.ts",
+      "target": "function:src/utils/formatting.ts:colorize",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:src/utils/formatting.ts:printAgentInfo",
+      "target": "function:src/utils/formatting.ts:colorize",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/cli/main.ts",
+      "target": "file:src/config/constants.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/cli/main.ts",
+      "target": "file:src/config/settings.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/cli/main.ts",
+      "target": "file:src/database/client.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/cli/main.ts",
+      "target": "file:src/database/embedding.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/cli/main.ts",
+      "target": "file:src/database/initializer.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/cli/main.ts",
+      "target": "file:src/graph/builder.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/cli/main.ts",
+      "target": "file:src/graph/state.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/cli/main.ts",
+      "target": "file:src/utils/formatting.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/cli/main.ts",
+      "target": "file:src/utils/logger.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/cli/main.ts",
+      "target": "function:src/cli/main.ts:main",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/cli/main.ts",
+      "target": "function:src/cli/main.ts:bootstrap",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/cli/main.ts",
+      "target": "function:src/cli/main.ts:runOneDiscussion",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/cli/main.ts",
+      "target": "function:src/cli/main.ts:printFinalState",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/cli/main.ts",
+      "target": "function:src/cli/main.ts:printAppBanner",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/cli/main.ts",
+      "target": "function:src/cli/main.ts:printRoundReview",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/cli/main.ts",
+      "target": "function:src/cli/main.ts:main",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:src/cli/main.ts:bootstrap",
+      "target": "function:src/database/client.ts:countDocs",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:src/cli/main.ts:bootstrap",
+      "target": "function:src/database/embedding.ts:getEmbedderModel",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:src/cli/main.ts:bootstrap",
+      "target": "function:src/database/initializer.ts:buildAgentsIndices",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:src/cli/main.ts:bootstrap",
+      "target": "function:src/config/settings.ts:getSettings",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:src/cli/main.ts:bootstrap",
+      "target": "function:src/utils/formatting.ts:printSystem",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:src/cli/main.ts:main",
+      "target": "function:src/graph/builder.ts:buildGraph",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:src/cli/main.ts:main",
+      "target": "function:src/utils/formatting.ts:printBanner",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:src/cli/main.ts:printFinalState",
+      "target": "function:src/utils/formatting.ts:printMessagesTable",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:src/cli/main.ts:runOneDiscussion",
+      "target": "function:src/utils/formatting.ts:formatSeparator",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:src/cli/main.ts:printAppBanner",
+      "target": "function:src/utils/formatting.ts:printBanner",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/graph/route.ts",
+      "target": "file:src/config/constants.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/graph/route.ts",
+      "target": "file:src/config/settings.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/graph/route.ts",
+      "target": "file:src/graph/state.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/graph/route.ts",
+      "target": "file:src/utils/logger.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/graph/route.ts",
+      "target": "function:src/graph/route.ts:routeToWhichAgent",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/graph/route.ts",
+      "target": "function:src/graph/route.ts:routeToWhichAgent",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:src/graph/route.ts:routeToWhichAgent",
+      "target": "function:src/config/settings.ts:getSettings",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:src/graph/route.ts:routeToWhichAgent",
+      "target": "function:src/config/constants.ts:isAgentName",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/index.ts",
+      "target": "file:src/cli/main.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "service:docker-compose.yml",
+      "target": "service:docker-compose.yml:postgres",
+      "type": "deploys",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "config:tsconfig.json",
+      "target": "file:src/index.ts",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "config:package.json",
+      "target": "file:src/index.ts",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "config:.env.example",
+      "target": "file:src/index.ts",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "service:docker-compose.yml:postgres",
+      "target": "file:src/index.ts",
+      "type": "deploys",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "document:README.md",
+      "target": "file:src/index.ts",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:CLAUDE.md",
+      "target": "file:src/index.ts",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:project_flow.md",
+      "target": "file:src/index.ts",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:README.md",
+      "target": "service:docker-compose.yml",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "config:data/seed/architect/seeds.json",
+      "target": "config:data/seed/backend/seeds.json",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "config:data/seed/architect/seeds.json",
+      "target": "config:data/seed/frontend/seeds.json",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "config:data/seed/architect/seeds.json",
+      "target": "config:data/seed/pm/seeds.json",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "config:data/seed/architect/seeds.json",
+      "target": "config:data/seed/tester/seeds.json",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    }
+  ],
+  "layers": [
+    {
+      "id": "layer:entry-cli",
+      "name": "入口与 CLI 层",
+      "description": "进程入口薄壳与 CLI 主循环：先加载 .env，再 bootstrap（pingDb、预热 embedding、初始化各 agent 的 PostgreSQL 表），构建 LangGraph 并在 REPL 里驱动多 Agent 讨论。",
+      "nodeIds": [
+        "file:src/index.ts",
+        "file:src/cli/main.ts"
+      ]
+    },
+    {
+      "id": "layer:graph-orchestration",
+      "name": "图编排层",
+      "description": "LangGraph 编排核心：把 5 个角色 Agent 包装成 StateGraph 节点，定义共享 state 与 routeToWhichAgent 条件边，以 architect 为入口编译出可 stream 的状态机。",
+      "nodeIds": [
+        "file:src/graph/builder.ts",
+        "file:src/graph/route.ts",
+        "file:src/graph/state.ts"
+      ]
+    },
+    {
+      "id": "layer:agents",
+      "name": "Agent 角色层",
+      "description": "BaseAgent 抽象基类（工具循环 + 结构化收尾 + RAG tool 绑定）及架构师、后端、前端、产品、测试 5 个继承自它的角色 Agent。",
+      "nodeIds": [
+        "file:src/agents/base.ts",
+        "file:src/agents/architect.ts",
+        "file:src/agents/backend.ts",
+        "file:src/agents/frontend.ts",
+        "file:src/agents/pm.ts",
+        "file:src/agents/tester.ts"
+      ]
+    },
+    {
+      "id": "layer:rag-data",
+      "name": "RAG 数据层",
+      "description": "基于 PostgreSQL（pgvector）的 RAG 数据层：连接池/建表、本地 transformers embedding、cross-encoder rerank、混合检索器，以及 load→split→embed→upsert 的灌库流水线。",
+      "nodeIds": [
+        "file:src/database/client.ts",
+        "file:src/database/constants.ts",
+        "file:src/database/embedding.ts",
+        "file:src/database/initializer.ts",
+        "file:src/database/loaders.ts",
+        "file:src/database/rag_retriever.ts",
+        "file:src/database/reranker.ts",
+        "file:src/database/splitters.ts"
+      ]
+    },
+    {
+      "id": "layer:config",
+      "name": "配置层",
+      "description": "项目配置中心：用 Zod 校验 .env 的全局 settings、角色名枚举与描述常量，以及根目录的 package.json/tsconfig/.env.example 等构建与运行期配置。",
+      "nodeIds": [
+        "file:src/config/settings.ts",
+        "file:src/config/constants.ts",
+        "config:package.json",
+        "config:tsconfig.json",
+        "config:.env.example",
+        "config:pnpm-workspace.yaml",
+        "config:.npmrc"
+      ]
+    },
+    {
+      "id": "layer:utility",
+      "name": "工具层",
+      "description": "跨层共享的基础工具：按等级过滤的彩色 logger，以及基于 boxen/chalk/cli-table3 的 CLI 终端美化输出函数集。",
+      "nodeIds": [
+        "file:src/utils/logger.ts",
+        "file:src/utils/formatting.ts"
+      ]
+    },
+    {
+      "id": "layer:seed-data",
+      "name": "种子数据层",
+      "description": "各角色 Agent 的 RAG 种子知识库（每个一份 seeds.json），bootstrap 时被切块、embedding 后写入对应 agent 的向量表。",
+      "nodeIds": [
+        "config:data/seed/architect/seeds.json",
+        "config:data/seed/backend/seeds.json",
+        "config:data/seed/frontend/seeds.json",
+        "config:data/seed/pm/seeds.json",
+        "config:data/seed/tester/seeds.json"
+      ]
+    },
+    {
+      "id": "layer:infrastructure-docs",
+      "name": "基础设施与文档",
+      "description": "Docker Compose 编排的单节点 pgvector PostgreSQL（RAG 向量存储后端），以及 README/CLAUDE/project_flow 等项目说明与调用流程文档。",
+      "nodeIds": [
+        "service:docker-compose.yml",
+        "service:docker-compose.yml:postgres",
+        "document:README.md",
+        "document:CLAUDE.md",
+        "document:project_flow.md"
+      ]
+    }
+  ],
+  "tour": [
+    {
+      "order": 1,
+      "title": "项目总览",
+      "description": "从 README.md 开始，先建立全局认知：MeetMind 是一个多 Agent RAG 协作系统，5 个角色 Agent（架构师、后端、前端、测试、产品）围绕一个需求展开讨论。README 介绍了系统定位、RAG 检索链路、项目结构与快速开始步骤，是理解后续所有代码的地图。搭配 project_flow.md 可进一步看到自顶向下的完整调用链概览。",
+      "nodeIds": [
+        "document:README.md",
+        "document:project_flow.md"
+      ]
+    },
+    {
+      "order": 2,
+      "title": "进程入口薄壳",
+      "description": "src/index.ts 是真正的进程入口，但它只是一层 5 行的薄壳：先加载 .env 环境变量，再导入并启动 cli/main。这个顺序很关键——它保证所有配置在任何模块求值之前就绪。理解了这一点，就能明白为什么真正的逻辑都在下一步的 CLI 主循环里。",
+      "nodeIds": [
+        "file:src/index.ts"
+      ],
+      "languageLesson": "TypeScript（NodeNext 模块解析）要求源码 import 路径带 .js 后缀，即使实际文件是 .ts。先 import dotenv 再 import 业务模块是常见的 side-effect import 顺序技巧：模块顶层代码会在 import 时立即执行，所以环境变量必须最先就位。"
+    },
+    {
+      "order": 3,
+      "title": "CLI 主循环与 bootstrap",
+      "description": "src/cli/main.ts 是 CLI 的实际入口，也是整个 BFS 遍历的起点。它做三件事：打印 banner、执行 bootstrap（ping 数据库、预热 embedding 模型、初始化 5 个 Agent 的 PostgreSQL 表），然后构建 LangGraph 并进入 REPL 循环，每读到一条用户需求就调用 graph.stream() 驱动一轮多 Agent 讨论。这是承上启下的总调度台：往下深入 bootstrap 就到了 RAG 数据层，往后则进入图编排层。",
+      "nodeIds": [
+        "file:src/cli/main.ts"
+      ]
+    },
+    {
+      "order": 4,
+      "title": "配置中心与角色常量",
+      "description": "在深入业务之前先看配置层——它是 fan-in 最高的一组文件（被几乎所有模块依赖）。settings.ts 用 Zod 校验并加载 .env，缺失必填项时直接退出，并把相对路径锚定到 PROJECT_ROOT；constants.ts 集中定义 5 个角色名、AGENT_NAMES 枚举、角色描述与 isAgentName 类型守卫，供 agents 层和 graph 层共享。.env.example 则是这套配置的可读模板，列出了 LLM、PostgreSQL、embedding/rerank 模型与 RAG 召回数量等全部运行期开关。",
+      "nodeIds": [
+        "file:src/config/settings.ts",
+        "file:src/config/constants.ts",
+        "config:.env.example"
+      ],
+      "languageLesson": "Zod 是 TypeScript 的运行期 schema 校验库：用 z.object({...}) 声明 schema，parse() 在启动时校验环境变量并推导出静态类型，做到「一处声明，既校验又有类型」。这比手写 if 判断 + 类型断言更安全。"
+    },
+    {
+      "order": 5,
+      "title": "图的共享状态",
+      "description": "src/graph/state.ts 定义了 LangGraph 所有节点共享的状态 AgentStateAnnotation。理解它是理解整个编排的钥匙：messages 字段走「追加」reducer（每个节点的发言都被累积进对话历史），而 requirement / next_agent / done / iteration 等字段则是「覆盖」语义。后面的路由和 Agent 节点都围绕读写这个 state 运转。",
+      "nodeIds": [
+        "file:src/graph/state.ts"
+      ],
+      "languageLesson": "LangGraph 的状态通过 Annotation 定义每个字段的 reducer——reducer 决定「新值如何合并进旧值」。messages 用追加 reducer 实现对话累积，普通字段默认覆盖。这种「按字段定制合并策略」是 LangGraph 区别于普通状态机的核心机制。"
+    },
+    {
+      "order": 6,
+      "title": "LangGraph 编排核心",
+      "description": "src/graph/builder.ts 是 fan-out 最高的文件，把一切粘合起来：它实例化全部 5 个角色 Agent，用 createNode 把每个 Agent 包装成 StateGraph 节点，以 architect 作为图的入口，其余节点全部经 routeToWhichAgent 这条条件边自由路由，最后 compile 出一张可 stream 的图返回给第 3 步的 main.ts。读完这一步，多 Agent 协作的「骨架」就完整了。",
+      "nodeIds": [
+        "file:src/graph/builder.ts"
+      ],
+      "languageLesson": "LangGraph 的 conditionalEdges（条件边）是动态路由的关键：节点执行完后不走固定的下一站，而是调用一个路由函数，由它读取当前 state 返回下一个节点名。这让「下一个该谁发言」由运行期的对话内容决定，而非编译期写死。"
+    },
+    {
+      "order": 7,
+      "title": "条件边路由决策",
+      "description": "src/graph/route.ts 定义 routeToWhichAgent——第 6 步里所有节点共用的那条条件边函数。它按严格优先级决定下一站：先看 iteration 是否超上限（防止无限循环），再看 state.done，再看 next_agent 是否合法，最后兜底回架构师。正是这套优先级保证了图永远不会卡死，也实现了「架构师是入口和终止者、其余角色自由路由」的协作协议。",
+      "nodeIds": [
+        "file:src/graph/route.ts"
+      ]
+    },
+    {
+      "order": 8,
+      "title": "Agent 抽象基类",
+      "description": "src/agents/base.ts 是 Agent 角色层的心脏，所有角色都继承自它。BaseAgent.invoke() 实现两阶段推理：先 cleanBadChars 清掉 stdin 来的非法 surrogate 字符，再把每个 Agent 私有的 RAGRetriever 作为 LangChain Tool 绑定到 LLM，跑工具调用循环，最后用 ModelOutputSchema 强约束 LLM 的结构化收尾（解析出 next_agent / done）。这一步把第 5 步的 state 和第 11 步的 RAG 检索串了起来。",
+      "nodeIds": [
+        "file:src/agents/base.ts"
+      ],
+      "languageLesson": "「RAG 作为 Tool 而非 prompt 注入」是本项目的关键设计：旧做法把检索结果硬塞进 prompt，这里改用 LLM 的 function calling 协议——bindTools([ragTool]) 让模型自主决定何时检索、检索什么。代价是底层 LLM 必须支持 OpenAI 兼容的 tool calling。"
+    },
+    {
+      "order": 9,
+      "title": "5 个角色 Agent",
+      "description": "在第 8 步的 BaseAgent 之上，5 个角色各自只是一层薄薄的 systemPrompt 定制。架构师（architect.ts）最特殊——它是整个讨论的入口和终止者，只负责派活、广播、收尾、分派四类调度动作而不亲自回答；backend / frontend / pm / tester 则分别注入后端、前端、产品、测试视角的 systemPrompt。它们都被第 6 步的 builder 实例化并包装成图节点。",
+      "nodeIds": [
+        "file:src/agents/architect.ts",
+        "file:src/agents/backend.ts",
+        "file:src/agents/frontend.ts",
+        "file:src/agents/pm.ts",
+        "file:src/agents/tester.ts"
+      ],
+      "languageLesson": "这是典型的「模板方法 + 继承」模式：BaseAgent 把通用的工具循环与路由解析做成不可变的骨架（invoke），子类只覆盖 systemPrompt 这一个差异点。新增一个角色几乎零成本，正是这种「行为复用、差异下放」带来的好处。"
+    },
+    {
+      "order": 10,
+      "title": "RAG 数据基座",
+      "description": "现在深入第 8 步 Agent 调用的 RAG 检索背后的基础设施。这组文件构成一个紧耦合的数据基座：client.ts 是 PostgreSQL 连接池单例，负责 pingDb 探活、启用 pgvector/pg_trgm 扩展、按 agent 建带向量列与索引的表；embedding.ts 用 transformers.js 本地惰性加载 all-MiniLM-L6-v2，把文本算成 384 维向量。第 3 步 bootstrap 里 ping 数据库与预热 embedding，依赖的正是这两个模块。",
+      "nodeIds": [
+        "file:src/database/client.ts",
+        "file:src/database/embedding.ts",
+        "file:src/database/constants.ts"
+      ],
+      "languageLesson": "embedding 与连接池都用「惰性单例」模式：模型只在首次调用时加载、连接池只建一次，之后复用。本地跑 transformers.js 意味着无需调用外部 embedding API，首次会从 HuggingFace 下载约 80MB 权重到本地缓存——这是一次性成本，换来零网络依赖的推理。"
+    },
+    {
+      "order": 11,
+      "title": "混合检索与重排序",
+      "description": "src/database/rag_retriever.ts 是 RAG 的核心，也是第 8 步里被绑定成 Tool 的那个检索器。RAGRetriever.retrieve() 并行跑两路召回——pg_trgm 关键词检索 + pgvector kNN 向量检索——按 id 去重合并后，全部送进 reranker.ts 的本地 cross-encoder（Xenova/bge-reranker-base）逐对打分，按 relevance 排序返回 top-K。reranker 还内置降级保护：模型失败时退化为「原序返回前 N 条」，保证检索链路不会整体中断。",
+      "nodeIds": [
+        "file:src/database/rag_retriever.ts",
+        "file:src/database/reranker.ts"
+      ],
+      "languageLesson": "「混合检索 + cross-encoder rerank」是现代 RAG 的标准范式：BM25/pg_trgm 关键词召回擅长精确匹配，向量 kNN 召回擅长语义相近，两路互补提高召回率；之后 cross-encoder 把 query 和每个候选拼在一起精排，比向量内积更准但更慢，所以只用在召回后的少量候选上。"
+    },
+    {
+      "order": 12,
+      "title": "灌库流水线与种子数据",
+      "description": "RAG 检索要有数据可查，数据从哪来？第 3 步 bootstrap 调用的 initializer.ts 跑一条 load→split→embed→upsert 流水线：loaders.ts 按后缀解析 json/markdown/pdf/docx/txt，splitters.ts 按文档 type 二次切块，embedBatch 算向量，最后用内容 md5 作为 doc-id 幂等地写入各 agent 专属的向量表。每个角色的知识来自 data/seed/<role>/seeds.json——这里以架构师的种子库为例，它收录了架构决策、技术选型与协作规范等知识。",
+      "nodeIds": [
+        "file:src/database/initializer.ts",
+        "file:src/database/loaders.ts",
+        "file:src/database/splitters.ts",
+        "config:data/seed/architect/seeds.json"
+      ],
+      "languageLesson": "用「内容 md5 作为主键」实现幂等 upsert 是数据灌库的经典技巧：同一段内容无论灌多少次，doc-id 都相同，数据库的 ON CONFLICT 会去重而非重复插入。这样反复重启 bootstrap 不会把库灌脏，开发时也能放心地反复重灌。"
+    },
+    {
+      "order": 13,
+      "title": "向量存储基础设施",
+      "description": "最后看支撑全部 RAG 的底层基础设施。docker-compose.yml 用一行命令起一个单节点 pgvector/pgvector:pg17 的 PostgreSQL 容器（meetmind-pg），宿主机映射到 5433 端口，带 pg_isready 健康检查与持久化数据卷 pg_data。它正是第 10 步 client.ts 连接、第 11 步混合检索查询的那个数据库后端——闭环至此完成：基础设施 → 灌库 → 检索 → Agent 推理 → 图路由 → CLI 循环。",
+      "nodeIds": [
+        "service:docker-compose.yml",
+        "service:docker-compose.yml:postgres"
+      ],
+      "languageLesson": "docker-compose 的 healthcheck（这里用 pg_isready）配合 depends_on 的 condition: service_healthy，能保证应用只在数据库真正就绪后才连接，而不是容器一启动就连——避免了「容器起来了但 PostgreSQL 还没接受连接」的竞态。pgvector 镜像在标准 PostgreSQL 上预装了 vector 扩展，开箱即得向量检索能力。"
+    }
+  ]
+}

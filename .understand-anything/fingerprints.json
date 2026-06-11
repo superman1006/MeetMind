@@ -1,0 +1,1628 @@
+{
+  "version": "1.0.0",
+  "gitCommitHash": "499a9008f25b0f4badff83e004004782909ef397",
+  "generatedAt": "2026-05-29T15:46:09.301Z",
+  "files": {
+    "src/agents/architect.ts": {
+      "filePath": "src/agents/architect.ts",
+      "contentHash": "d15829f35d477d855cfb0efc50bbb513c5a98de9a4a5fb497e9eeeca843f88c9",
+      "functions": [],
+      "classes": [
+        {
+          "name": "ArchitectAgent",
+          "methods": [
+            "constructor",
+            "systemPrompt"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 26
+        }
+      ],
+      "imports": [
+        {
+          "source": "../config/constants.js",
+          "specifiers": [
+            "ARCHITECT"
+          ]
+        },
+        {
+          "source": "./base.js",
+          "specifiers": [
+            "BaseAgent"
+          ]
+        }
+      ],
+      "exports": [
+        "ArchitectAgent"
+      ],
+      "totalLines": 34,
+      "hasStructuralAnalysis": true
+    },
+    "src/agents/backend.ts": {
+      "filePath": "src/agents/backend.ts",
+      "contentHash": "fc6f08740109fa3e605e5d339d1ecf2ebf862ae6e69fa2236fc78c9f3c482e76",
+      "functions": [],
+      "classes": [
+        {
+          "name": "BackendAgent",
+          "methods": [
+            "constructor",
+            "systemPrompt"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 15
+        }
+      ],
+      "imports": [
+        {
+          "source": "../config/constants.js",
+          "specifiers": [
+            "BACKEND"
+          ]
+        },
+        {
+          "source": "./base.js",
+          "specifiers": [
+            "BaseAgent"
+          ]
+        }
+      ],
+      "exports": [
+        "BackendAgent"
+      ],
+      "totalLines": 23,
+      "hasStructuralAnalysis": true
+    },
+    "src/agents/base.ts": {
+      "filePath": "src/agents/base.ts",
+      "contentHash": "048c5d63427f7c3df1180a0061aea388e2d48514e18ececc39e66cd26cba9b52",
+      "functions": [
+        {
+          "name": "cleanBadChars",
+          "params": [
+            "text"
+          ],
+          "returnType": "string",
+          "exported": true,
+          "lineCount": 27
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "@langchain/core/messages",
+          "specifiers": [
+            "AIMessage",
+            "BaseMessage",
+            "HumanMessage",
+            "SystemMessage",
+            "ToolMessage"
+          ]
+        },
+        {
+          "source": "@langchain/core/messages/tool",
+          "specifiers": [
+            "ToolCall"
+          ]
+        },
+        {
+          "source": "@langchain/openai",
+          "specifiers": [
+            "ChatOpenAI"
+          ]
+        },
+        {
+          "source": "zod",
+          "specifiers": [
+            "z"
+          ]
+        },
+        {
+          "source": "../config/constants.js",
+          "specifiers": [
+            "AGENT_NAMES",
+            "ARCHITECT",
+            "ROLE_DESCRIPTIONS",
+            "isAgentName"
+          ]
+        },
+        {
+          "source": "../config/settings.js",
+          "specifiers": [
+            "getSettings"
+          ]
+        },
+        {
+          "source": "../database/rag_retriever.js",
+          "specifiers": [
+            "RAGRetriever"
+          ]
+        },
+        {
+          "source": "../utils/logger.js",
+          "specifiers": [
+            "getLogger"
+          ]
+        }
+      ],
+      "exports": [
+        "cleanBadChars",
+        "ModelOutputSchema"
+      ],
+      "totalLines": 330,
+      "hasStructuralAnalysis": true
+    },
+    "src/agents/frontend.ts": {
+      "filePath": "src/agents/frontend.ts",
+      "contentHash": "d41a0edc8ce58c7a9b3187c81ca12f1581074e51bf5a1fcfc7a0de27df67c13f",
+      "functions": [],
+      "classes": [
+        {
+          "name": "FrontendAgent",
+          "methods": [
+            "constructor",
+            "systemPrompt"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 15
+        }
+      ],
+      "imports": [
+        {
+          "source": "../config/constants.js",
+          "specifiers": [
+            "FRONTEND"
+          ]
+        },
+        {
+          "source": "./base.js",
+          "specifiers": [
+            "BaseAgent"
+          ]
+        }
+      ],
+      "exports": [
+        "FrontendAgent"
+      ],
+      "totalLines": 23,
+      "hasStructuralAnalysis": true
+    },
+    "src/agents/pm.ts": {
+      "filePath": "src/agents/pm.ts",
+      "contentHash": "f9285cd3006105b4ddfde3de243f8a5ff68091445e7c0b751311d69ce9bd3105",
+      "functions": [],
+      "classes": [
+        {
+          "name": "PMAgent",
+          "methods": [
+            "constructor",
+            "systemPrompt"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 15
+        }
+      ],
+      "imports": [
+        {
+          "source": "../config/constants.js",
+          "specifiers": [
+            "PM"
+          ]
+        },
+        {
+          "source": "./base.js",
+          "specifiers": [
+            "BaseAgent"
+          ]
+        }
+      ],
+      "exports": [
+        "PMAgent"
+      ],
+      "totalLines": 23,
+      "hasStructuralAnalysis": true
+    },
+    "src/agents/tester.ts": {
+      "filePath": "src/agents/tester.ts",
+      "contentHash": "a14d747fd401e1b56773e572c1e6a601b3d8a993e131fb2c591369aba8a10146",
+      "functions": [],
+      "classes": [
+        {
+          "name": "TesterAgent",
+          "methods": [
+            "constructor",
+            "systemPrompt"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 15
+        }
+      ],
+      "imports": [
+        {
+          "source": "../config/constants.js",
+          "specifiers": [
+            "TESTER"
+          ]
+        },
+        {
+          "source": "./base.js",
+          "specifiers": [
+            "BaseAgent"
+          ]
+        }
+      ],
+      "exports": [
+        "TesterAgent"
+      ],
+      "totalLines": 23,
+      "hasStructuralAnalysis": true
+    },
+    "src/cli/main.ts": {
+      "filePath": "src/cli/main.ts",
+      "contentHash": "e5204cb06009dc3ef3ac83bfef9259be85bfab8e6fd867a09e843fbf7d5f51d5",
+      "functions": [
+        {
+          "name": "printAppBanner",
+          "params": [],
+          "returnType": "void",
+          "exported": false,
+          "lineCount": 12
+        },
+        {
+          "name": "pathExists",
+          "params": [
+            "p"
+          ],
+          "returnType": "Promise<boolean>",
+          "exported": false,
+          "lineCount": 8
+        },
+        {
+          "name": "bootstrap",
+          "params": [],
+          "returnType": "Promise<void>",
+          "exported": false,
+          "lineCount": 114
+        },
+        {
+          "name": "runOneDiscussion",
+          "params": [
+            "graph",
+            "requirement"
+          ],
+          "returnType": "Promise<AgentState>",
+          "exported": false,
+          "lineCount": 33
+        },
+        {
+          "name": "printRoundReview",
+          "params": [
+            "state"
+          ],
+          "returnType": "void",
+          "exported": false,
+          "lineCount": 12
+        },
+        {
+          "name": "printFinalState",
+          "params": [
+            "state"
+          ],
+          "returnType": "void",
+          "exported": false,
+          "lineCount": 23
+        },
+        {
+          "name": "main",
+          "params": [],
+          "returnType": "Promise<void>",
+          "exported": true,
+          "lineCount": 51
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "node:path",
+          "specifiers": [
+            "path"
+          ]
+        },
+        {
+          "source": "node:fs/promises",
+          "specifiers": [
+            "readdir",
+            "stat"
+          ]
+        },
+        {
+          "source": "node:readline/promises",
+          "specifiers": [
+            "createInterface"
+          ]
+        },
+        {
+          "source": "chalk",
+          "specifiers": [
+            "chalk"
+          ]
+        },
+        {
+          "source": "ora",
+          "specifiers": [
+            "ora"
+          ]
+        },
+        {
+          "source": "../config/constants.js",
+          "specifiers": [
+            "AGENT_NAMES",
+            "ROLE_DESCRIPTIONS"
+          ]
+        },
+        {
+          "source": "../config/settings.js",
+          "specifiers": [
+            "getSettings"
+          ]
+        },
+        {
+          "source": "../database/client.js",
+          "specifiers": [
+            "countDocs",
+            "pingDb"
+          ]
+        },
+        {
+          "source": "../database/embedding.js",
+          "specifiers": [
+            "getEmbedderModel"
+          ]
+        },
+        {
+          "source": "../database/initializer.js",
+          "specifiers": [
+            "buildAgentsIndices"
+          ]
+        },
+        {
+          "source": "../graph/builder.js",
+          "specifiers": [
+            "buildGraph"
+          ]
+        },
+        {
+          "source": "../graph/state.js",
+          "specifiers": [
+            "AgentState",
+            "MessageTurn"
+          ]
+        },
+        {
+          "source": "../utils/formatting.js",
+          "specifiers": [
+            "formatSeparator",
+            "printBanner",
+            "printMessagesTable",
+            "printSystem"
+          ]
+        },
+        {
+          "source": "../utils/logger.js",
+          "specifiers": [
+            "getLogger",
+            "setupLogging"
+          ]
+        }
+      ],
+      "exports": [
+        "main"
+      ],
+      "totalLines": 302,
+      "hasStructuralAnalysis": true
+    },
+    "src/config/constants.ts": {
+      "filePath": "src/config/constants.ts",
+      "contentHash": "ce40baa27928f3074cf52e119bd5a213e3dea7660ce84880d41618ed2cfb7e35",
+      "functions": [
+        {
+          "name": "isAgentName",
+          "params": [
+            "value"
+          ],
+          "exported": true,
+          "lineCount": 3
+        }
+      ],
+      "classes": [],
+      "imports": [],
+      "exports": [
+        "ARCHITECT",
+        "BACKEND",
+        "FRONTEND",
+        "TESTER",
+        "PM",
+        "AGENT_NAMES",
+        "NON_ARCHITECT_AGENTS",
+        "ROLE_DESCRIPTIONS",
+        "isAgentName"
+      ],
+      "totalLines": 29,
+      "hasStructuralAnalysis": true
+    },
+    "src/config/settings.ts": {
+      "filePath": "src/config/settings.ts",
+      "contentHash": "14e6f74aa29c7325cc75ba29032d308b7b278742605ee21925de3ba79b760123",
+      "functions": [
+        {
+          "name": "resolveRel",
+          "params": [
+            "p"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 6
+        },
+        {
+          "name": "getSettings",
+          "params": [],
+          "returnType": "Settings",
+          "exported": true,
+          "lineCount": 36
+        },
+        {
+          "name": "settingFieldNames",
+          "params": [],
+          "returnType": "readonly string[]",
+          "exported": true,
+          "lineCount": 3
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "node:path",
+          "specifiers": [
+            "path"
+          ]
+        },
+        {
+          "source": "node:url",
+          "specifiers": [
+            "fileURLToPath"
+          ]
+        },
+        {
+          "source": "dotenv",
+          "specifiers": [
+            "loadDotenv"
+          ]
+        },
+        {
+          "source": "zod",
+          "specifiers": [
+            "z"
+          ]
+        }
+      ],
+      "exports": [
+        "PROJECT_ROOT",
+        "getSettings",
+        "settingFieldNames"
+      ],
+      "totalLines": 117,
+      "hasStructuralAnalysis": true
+    },
+    "src/database/client.ts": {
+      "filePath": "src/database/client.ts",
+      "contentHash": "d0a35581e107d59e5270c91d7b4acd29a4a66c33f71fb02c2673d40130eda9c2",
+      "functions": [
+        {
+          "name": "getPgPool",
+          "params": [],
+          "returnType": "pg.Pool",
+          "exported": true,
+          "lineCount": 16
+        },
+        {
+          "name": "pingDb",
+          "params": [],
+          "returnType": "Promise<boolean>",
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "ensureExtensions",
+          "params": [],
+          "returnType": "Promise<void>",
+          "exported": true,
+          "lineCount": 5
+        },
+        {
+          "name": "ensureAgentTable",
+          "params": [
+            "agentName"
+          ],
+          "returnType": "Promise<string>",
+          "exported": true,
+          "lineCount": 31
+        },
+        {
+          "name": "countDocs",
+          "params": [
+            "agentName"
+          ],
+          "returnType": "Promise<number>",
+          "exported": true,
+          "lineCount": 16
+        },
+        {
+          "name": "deleteAgentTable",
+          "params": [
+            "agentName"
+          ],
+          "returnType": "Promise<void>",
+          "exported": true,
+          "lineCount": 6
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "pg",
+          "specifiers": [
+            "pg"
+          ]
+        },
+        {
+          "source": "../config/settings.js",
+          "specifiers": [
+            "getSettings"
+          ]
+        },
+        {
+          "source": "../utils/logger.js",
+          "specifiers": [
+            "getLogger"
+          ]
+        },
+        {
+          "source": "./constants.js",
+          "specifiers": [
+            "getTableName"
+          ]
+        },
+        {
+          "source": "./embedding.js",
+          "specifiers": [
+            "getEmbedModelDim"
+          ]
+        }
+      ],
+      "exports": [
+        "getPgPool",
+        "pingDb",
+        "ensureExtensions",
+        "ensureAgentTable",
+        "countDocs",
+        "deleteAgentTable"
+      ],
+      "totalLines": 138,
+      "hasStructuralAnalysis": true
+    },
+    "src/database/constants.ts": {
+      "filePath": "src/database/constants.ts",
+      "contentHash": "3232f2b8a21793f32155228f2d5cbad1e5e0908ec423362359e88a78434152ac",
+      "functions": [
+        {
+          "name": "getTableName",
+          "params": [
+            "agentName"
+          ],
+          "returnType": "string",
+          "exported": true,
+          "lineCount": 3
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "../config/settings.js",
+          "specifiers": [
+            "getSettings"
+          ]
+        }
+      ],
+      "exports": [
+        "getTableName"
+      ],
+      "totalLines": 16,
+      "hasStructuralAnalysis": true
+    },
+    "src/database/embedding.ts": {
+      "filePath": "src/database/embedding.ts",
+      "contentHash": "909686f897956efd219ebd90381914e6a63333f774347dd741ac649c19749957",
+      "functions": [
+        {
+          "name": "getEmbedderModel",
+          "params": [],
+          "returnType": "Promise<FeatureExtractionPipeline>",
+          "exported": true,
+          "lineCount": 32
+        },
+        {
+          "name": "getEmbedModelDim",
+          "params": [],
+          "returnType": "Promise<number>",
+          "exported": true,
+          "lineCount": 13
+        },
+        {
+          "name": "embed",
+          "params": [
+            "text"
+          ],
+          "returnType": "Promise<number[]>",
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "embedBatch",
+          "params": [
+            "texts",
+            "batchSize"
+          ],
+          "returnType": "Promise<number[][]>",
+          "exported": true,
+          "lineCount": 29
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "node:path",
+          "specifiers": [
+            "path"
+          ]
+        },
+        {
+          "source": "@huggingface/transformers",
+          "specifiers": [
+            "FeatureExtractionPipeline",
+            "hfEnv",
+            "pipeline"
+          ]
+        },
+        {
+          "source": "../config/settings.js",
+          "specifiers": [
+            "getSettings"
+          ]
+        },
+        {
+          "source": "../utils/logger.js",
+          "specifiers": [
+            "getLogger"
+          ]
+        }
+      ],
+      "exports": [
+        "getEmbedderModel",
+        "getEmbedModelDim",
+        "embed",
+        "embedBatch"
+      ],
+      "totalLines": 124,
+      "hasStructuralAnalysis": true
+    },
+    "src/database/initializer.ts": {
+      "filePath": "src/database/initializer.ts",
+      "contentHash": "1435abbf12df9f64495864559e253232b2eb0b191efba51d0330600acdc2a7b2",
+      "functions": [
+        {
+          "name": "agentSeedDir",
+          "params": [
+            "agentName"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "pathExists",
+          "params": [
+            "p"
+          ],
+          "returnType": "Promise<boolean>",
+          "exported": false,
+          "lineCount": 8
+        },
+        {
+          "name": "getSeedsContent",
+          "params": [
+            "agentName"
+          ],
+          "returnType": "Promise<RawDoc[]>",
+          "exported": false,
+          "lineCount": 31
+        },
+        {
+          "name": "generateDocId",
+          "params": [
+            "agentName",
+            "content"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 5
+        },
+        {
+          "name": "getExistingIds",
+          "params": [
+            "tableName"
+          ],
+          "returnType": "Promise<Set<string>>",
+          "exported": false,
+          "lineCount": 11
+        },
+        {
+          "name": "toVectorLiteral",
+          "params": [
+            "vec"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "loadSeedsToPg",
+          "params": [
+            "agentName"
+          ],
+          "returnType": "Promise<number>",
+          "exported": true,
+          "lineCount": 66
+        },
+        {
+          "name": "buildAgentsIndices",
+          "params": [],
+          "returnType": "Promise<Record<string, number>>",
+          "exported": true,
+          "lineCount": 8
+        },
+        {
+          "name": "resetAgentDb",
+          "params": [
+            "agentName"
+          ],
+          "returnType": "Promise<void>",
+          "exported": true,
+          "lineCount": 5
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "node:crypto",
+          "specifiers": [
+            "createHash"
+          ]
+        },
+        {
+          "source": "node:fs/promises",
+          "specifiers": [
+            "readdir",
+            "stat"
+          ]
+        },
+        {
+          "source": "node:path",
+          "specifiers": [
+            "path"
+          ]
+        },
+        {
+          "source": "../config/constants.js",
+          "specifiers": [
+            "AGENT_NAMES"
+          ]
+        },
+        {
+          "source": "../config/settings.js",
+          "specifiers": [
+            "getSettings"
+          ]
+        },
+        {
+          "source": "../utils/logger.js",
+          "specifiers": [
+            "getLogger"
+          ]
+        },
+        {
+          "source": "./client.js",
+          "specifiers": [
+            "deleteAgentTable",
+            "ensureAgentTable",
+            "ensureExtensions",
+            "getPgPool"
+          ]
+        },
+        {
+          "source": "./embedding.js",
+          "specifiers": [
+            "embedBatch"
+          ]
+        },
+        {
+          "source": "./loaders.js",
+          "specifiers": [
+            "loadFile",
+            "RawDoc"
+          ]
+        },
+        {
+          "source": "./splitters.js",
+          "specifiers": [
+            "splitDocs"
+          ]
+        }
+      ],
+      "exports": [
+        "loadSeedsToPg",
+        "buildAgentsIndices",
+        "resetAgentDb"
+      ],
+      "totalLines": 215,
+      "hasStructuralAnalysis": true
+    },
+    "src/database/loaders.ts": {
+      "filePath": "src/database/loaders.ts",
+      "contentHash": "42d5e81f9cb9e131a833f4bddbc85b1302f966fbdb5b25704efe7c1c0f580a46",
+      "functions": [
+        {
+          "name": "loadJson",
+          "params": [
+            "filePath"
+          ],
+          "returnType": "Promise<RawDoc[]>",
+          "exported": true,
+          "lineCount": 39
+        },
+        {
+          "name": "loadMarkdown",
+          "params": [
+            "filePath"
+          ],
+          "returnType": "Promise<RawDoc[]>",
+          "exported": true,
+          "lineCount": 45
+        },
+        {
+          "name": "loadPdf",
+          "params": [
+            "filePath"
+          ],
+          "returnType": "Promise<RawDoc[]>",
+          "exported": true,
+          "lineCount": 38
+        },
+        {
+          "name": "loadDocx",
+          "params": [
+            "filePath"
+          ],
+          "returnType": "Promise<RawDoc[]>",
+          "exported": true,
+          "lineCount": 17
+        },
+        {
+          "name": "loadText",
+          "params": [
+            "filePath"
+          ],
+          "returnType": "Promise<RawDoc[]>",
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "loadFile",
+          "params": [
+            "filePath"
+          ],
+          "returnType": "Promise<RawDoc[]>",
+          "exported": true,
+          "lineCount": 14
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "node:fs/promises",
+          "specifiers": [
+            "readFile"
+          ]
+        },
+        {
+          "source": "node:path",
+          "specifiers": [
+            "path"
+          ]
+        },
+        {
+          "source": "../utils/logger.js",
+          "specifiers": [
+            "getLogger"
+          ]
+        }
+      ],
+      "exports": [
+        "loadJson",
+        "loadMarkdown",
+        "loadPdf",
+        "loadDocx",
+        "loadText",
+        "loadFile"
+      ],
+      "totalLines": 220,
+      "hasStructuralAnalysis": true
+    },
+    "src/database/rag_retriever.ts": {
+      "filePath": "src/database/rag_retriever.ts",
+      "contentHash": "1c8963686f0418e4e8e88e9f9e7cb6e6861f71b2e969f351a6a5ca0d9c3839b5",
+      "functions": [
+        {
+          "name": "asContextLine",
+          "params": [
+            "doc"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 8
+        }
+      ],
+      "classes": [
+        {
+          "name": "RAGRetriever",
+          "methods": [
+            "constructor",
+            "restart",
+            "getTableName",
+            "bm25Search",
+            "knnSearch",
+            "merge",
+            "retrieve",
+            "getTool"
+          ],
+          "properties": [
+            "agentName",
+            "callCount",
+            "_tableName"
+          ],
+          "exported": true,
+          "lineCount": 168
+        }
+      ],
+      "imports": [
+        {
+          "source": "@langchain/core/tools",
+          "specifiers": [
+            "tool"
+          ]
+        },
+        {
+          "source": "zod",
+          "specifiers": [
+            "z"
+          ]
+        },
+        {
+          "source": "../config/settings.js",
+          "specifiers": [
+            "getSettings"
+          ]
+        },
+        {
+          "source": "../utils/logger.js",
+          "specifiers": [
+            "getLogger"
+          ]
+        },
+        {
+          "source": "./client.js",
+          "specifiers": [
+            "ensureAgentTable",
+            "getPgPool"
+          ]
+        },
+        {
+          "source": "./embedding.js",
+          "specifiers": [
+            "embed"
+          ]
+        },
+        {
+          "source": "./reranker.js",
+          "specifiers": [
+            "rerank"
+          ]
+        }
+      ],
+      "exports": [
+        "RAGRetriever"
+      ],
+      "totalLines": 218,
+      "hasStructuralAnalysis": true
+    },
+    "src/database/reranker.ts": {
+      "filePath": "src/database/reranker.ts",
+      "contentHash": "1b215248a464aade1d2bf1475c34812e4d615afdc4c018bc862d9175eb0fb8b9",
+      "functions": [
+        {
+          "name": "loadReranker",
+          "params": [],
+          "returnType": "Promise<LoadedReranker>",
+          "exported": false,
+          "lineCount": 31
+        },
+        {
+          "name": "sigmoid",
+          "params": [
+            "x"
+          ],
+          "returnType": "number",
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "rerank",
+          "params": [
+            "query",
+            "documents",
+            "topN"
+          ],
+          "returnType": "Promise<RerankedDoc[]>",
+          "exported": true,
+          "lineCount": 73
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "@huggingface/transformers",
+          "specifiers": [
+            "AutoModelForSequenceClassification",
+            "AutoTokenizer",
+            "hfEnv",
+            "PreTrainedModel",
+            "PreTrainedTokenizer"
+          ]
+        },
+        {
+          "source": "../config/settings.js",
+          "specifiers": [
+            "getSettings"
+          ]
+        },
+        {
+          "source": "../utils/logger.js",
+          "specifiers": [
+            "getLogger"
+          ]
+        }
+      ],
+      "exports": [
+        "rerank"
+      ],
+      "totalLines": 158,
+      "hasStructuralAnalysis": true
+    },
+    "src/database/splitters.ts": {
+      "filePath": "src/database/splitters.ts",
+      "contentHash": "0c9bb946bc6e8a037404a26aa3db1d8bd9e0ac6e265b7cd35917796fc1fdc95d",
+      "functions": [
+        {
+          "name": "makeRecursive",
+          "params": [
+            "params"
+          ],
+          "returnType": "RecursiveCharacterTextSplitter",
+          "exported": false,
+          "lineCount": 8
+        },
+        {
+          "name": "splitJson",
+          "params": [
+            "docs"
+          ],
+          "returnType": "RawDoc[]",
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "splitMarkdown",
+          "params": [
+            "docs"
+          ],
+          "returnType": "Promise<RawDoc[]>",
+          "exported": true,
+          "lineCount": 22
+        },
+        {
+          "name": "splitPdf",
+          "params": [
+            "docs"
+          ],
+          "returnType": "Promise<RawDoc[]>",
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "splitDocx",
+          "params": [
+            "docs"
+          ],
+          "returnType": "Promise<RawDoc[]>",
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "splitText",
+          "params": [
+            "docs"
+          ],
+          "returnType": "Promise<RawDoc[]>",
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "splitWithRecursive",
+          "params": [
+            "docs",
+            "params"
+          ],
+          "returnType": "Promise<RawDoc[]>",
+          "exported": false,
+          "lineCount": 25
+        },
+        {
+          "name": "splitDocs",
+          "params": [
+            "docs"
+          ],
+          "returnType": "Promise<RawDoc[]>",
+          "exported": true,
+          "lineCount": 29
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "@langchain/textsplitters",
+          "specifiers": [
+            "MarkdownTextSplitter",
+            "RecursiveCharacterTextSplitter"
+          ]
+        },
+        {
+          "source": "../utils/logger.js",
+          "specifiers": [
+            "getLogger"
+          ]
+        },
+        {
+          "source": "./loaders.js",
+          "specifiers": [
+            "RawDoc"
+          ]
+        }
+      ],
+      "exports": [
+        "splitJson",
+        "splitMarkdown",
+        "splitPdf",
+        "splitDocx",
+        "splitText",
+        "splitDocs"
+      ],
+      "totalLines": 153,
+      "hasStructuralAnalysis": true
+    },
+    "src/graph/builder.ts": {
+      "filePath": "src/graph/builder.ts",
+      "contentHash": "233e63cf9f60951ad78bba61d0f09168fc01f679016ef41d8b08d530ada48641",
+      "functions": [
+        {
+          "name": "buildAllAgents",
+          "params": [],
+          "returnType": "Record<string, BaseAgent>",
+          "exported": false,
+          "lineCount": 9
+        },
+        {
+          "name": "formatHistory",
+          "params": [
+            "messages"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 10
+        },
+        {
+          "name": "createNode",
+          "params": [
+            "agent"
+          ],
+          "exported": false,
+          "lineCount": 33
+        },
+        {
+          "name": "buildGraph",
+          "params": [],
+          "exported": true,
+          "lineCount": 46
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "@langchain/langgraph",
+          "specifiers": [
+            "END",
+            "START",
+            "StateGraph"
+          ]
+        },
+        {
+          "source": "../agents/architect.js",
+          "specifiers": [
+            "ArchitectAgent"
+          ]
+        },
+        {
+          "source": "../agents/base.js",
+          "specifiers": [
+            "BaseAgent"
+          ]
+        },
+        {
+          "source": "../agents/backend.js",
+          "specifiers": [
+            "BackendAgent"
+          ]
+        },
+        {
+          "source": "../agents/frontend.js",
+          "specifiers": [
+            "FrontendAgent"
+          ]
+        },
+        {
+          "source": "../agents/pm.js",
+          "specifiers": [
+            "PMAgent"
+          ]
+        },
+        {
+          "source": "../agents/tester.js",
+          "specifiers": [
+            "TesterAgent"
+          ]
+        },
+        {
+          "source": "../config/constants.js",
+          "specifiers": [
+            "AGENT_NAMES",
+            "ARCHITECT",
+            "BACKEND",
+            "FRONTEND",
+            "PM",
+            "TESTER"
+          ]
+        },
+        {
+          "source": "../utils/formatting.js",
+          "specifiers": [
+            "printAgentInfo"
+          ]
+        },
+        {
+          "source": "../utils/logger.js",
+          "specifiers": [
+            "getLogger"
+          ]
+        },
+        {
+          "source": "./route.js",
+          "specifiers": [
+            "routeToWhichAgent"
+          ]
+        },
+        {
+          "source": "./state.js",
+          "specifiers": [
+            "AgentStateAnnotation",
+            "AgentState",
+            "MessageTurn"
+          ]
+        }
+      ],
+      "exports": [
+        "buildGraph"
+      ],
+      "totalLines": 142,
+      "hasStructuralAnalysis": true
+    },
+    "src/graph/route.ts": {
+      "filePath": "src/graph/route.ts",
+      "contentHash": "180b9bc1fd3334b39624a4e2be8217d9aa33c63d77309b848dd54a1e3d13ff6e",
+      "functions": [
+        {
+          "name": "routeToWhichAgent",
+          "params": [
+            "state"
+          ],
+          "returnType": "string",
+          "exported": true,
+          "lineCount": 23
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "@langchain/langgraph",
+          "specifiers": [
+            "END"
+          ]
+        },
+        {
+          "source": "../config/constants.js",
+          "specifiers": [
+            "ARCHITECT",
+            "isAgentName"
+          ]
+        },
+        {
+          "source": "../config/settings.js",
+          "specifiers": [
+            "getSettings"
+          ]
+        },
+        {
+          "source": "../utils/logger.js",
+          "specifiers": [
+            "getLogger"
+          ]
+        },
+        {
+          "source": "./state.js",
+          "specifiers": [
+            "AgentState"
+          ]
+        }
+      ],
+      "exports": [
+        "routeToWhichAgent"
+      ],
+      "totalLines": 46,
+      "hasStructuralAnalysis": true
+    },
+    "src/graph/state.ts": {
+      "filePath": "src/graph/state.ts",
+      "contentHash": "20bc28337a282114a393e99db6154134fff75a82cbe5b4cafdb49d4e2d55a579",
+      "functions": [],
+      "classes": [],
+      "imports": [
+        {
+          "source": "@langchain/langgraph",
+          "specifiers": [
+            "Annotation"
+          ]
+        }
+      ],
+      "exports": [
+        "AgentStateAnnotation"
+      ],
+      "totalLines": 54,
+      "hasStructuralAnalysis": true
+    },
+    "src/index.ts": {
+      "filePath": "src/index.ts",
+      "contentHash": "b86459e75d35d463b3685fe21a7735686192e2d1caf15b39f552a7ae6ac5871d",
+      "functions": [],
+      "classes": [],
+      "imports": [
+        {
+          "source": "dotenv",
+          "specifiers": [
+            "config"
+          ]
+        }
+      ],
+      "exports": [],
+      "totalLines": 23,
+      "hasStructuralAnalysis": true
+    },
+    "src/utils/formatting.ts": {
+      "filePath": "src/utils/formatting.ts",
+      "contentHash": "65859cc7d1b86924b037e3d881cdac02a8b014f0dd48f459d83165c15ad424c2",
+      "functions": [
+        {
+          "name": "formatSeparator",
+          "params": [
+            "title",
+            "char",
+            "width"
+          ],
+          "returnType": "string",
+          "exported": true,
+          "lineCount": 9
+        },
+        {
+          "name": "printAgentInfo",
+          "params": [
+            "opts"
+          ],
+          "returnType": "void",
+          "exported": true,
+          "lineCount": 29
+        },
+        {
+          "name": "printSystem",
+          "params": [
+            "message"
+          ],
+          "returnType": "void",
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "printBanner",
+          "params": [
+            "title",
+            "subtitle"
+          ],
+          "returnType": "void",
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "printMessagesTable",
+          "params": [
+            "rows"
+          ],
+          "returnType": "void",
+          "exported": true,
+          "lineCount": 23
+        },
+        {
+          "name": "colorize",
+          "params": [
+            "role"
+          ],
+          "returnType": "ChalkInstance",
+          "exported": true,
+          "lineCount": 16
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "boxen",
+          "specifiers": [
+            "boxen"
+          ]
+        },
+        {
+          "source": "chalk",
+          "specifiers": [
+            "chalk",
+            "ChalkInstance"
+          ]
+        },
+        {
+          "source": "cli-table3",
+          "specifiers": [
+            "Table"
+          ]
+        },
+        {
+          "source": "../config/constants.js",
+          "specifiers": [
+            "ROLE_DESCRIPTIONS"
+          ]
+        }
+      ],
+      "exports": [
+        "formatSeparator",
+        "printAgentInfo",
+        "printSystem",
+        "printBanner",
+        "printMessagesTable",
+        "colorize"
+      ],
+      "totalLines": 152,
+      "hasStructuralAnalysis": true
+    },
+    "src/utils/logger.ts": {
+      "filePath": "src/utils/logger.ts",
+      "contentHash": "a4a3d7c66826407e76c446eb12d62c0df66f8d2b33dd6ab1aee55abe393102ca",
+      "functions": [
+        {
+          "name": "levelRank",
+          "params": [
+            "level"
+          ],
+          "returnType": "number",
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "currentLevelRank",
+          "params": [],
+          "returnType": "number",
+          "exported": false,
+          "lineCount": 10
+        },
+        {
+          "name": "timestamp",
+          "params": [],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 7
+        },
+        {
+          "name": "colorLevel",
+          "params": [
+            "level"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 12
+        },
+        {
+          "name": "getLogger",
+          "params": [
+            "name"
+          ],
+          "returnType": "Logger",
+          "exported": true,
+          "lineCount": 24
+        },
+        {
+          "name": "setupLogging",
+          "params": [],
+          "returnType": "void",
+          "exported": true,
+          "lineCount": 3
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "chalk",
+          "specifiers": [
+            "chalk"
+          ]
+        },
+        {
+          "source": "../config/settings.js",
+          "specifiers": [
+            "getSettings"
+          ]
+        }
+      ],
+      "exports": [
+        "getLogger",
+        "setupLogging"
+      ],
+      "totalLines": 94,
+      "hasStructuralAnalysis": true
+    }
+  }
+}

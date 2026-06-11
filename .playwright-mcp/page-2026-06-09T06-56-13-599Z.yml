@@ -1,0 +1,90 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]: MeetMind
+      - generic [ref=e7]:
+        - button "模型配置" [ref=e9] [cursor=pointer]:
+          - img [ref=e10]
+        - button "搜索会话" [ref=e14] [cursor=pointer]:
+          - img [ref=e15]
+        - button "收缩会话列表" [ref=e19] [cursor=pointer]:
+          - img [ref=e20]
+    - button "+ 新会话" [ref=e22] [cursor=pointer]
+    - list [ref=e23]:
+      - listitem [ref=e24]: 今天
+      - listitem [ref=e25] [cursor=pointer]:
+        - generic [ref=e26]: 意图识别切换工作流
+      - listitem [ref=e27] [cursor=pointer]:
+        - generic [ref=e28]: 询问工具与技能
+      - listitem [ref=e29] [cursor=pointer]:
+        - generic [ref=e30]: tools 和 skills
+      - listitem [ref=e31]: 昨天
+      - listitem [ref=e32] [cursor=pointer]:
+        - generic [ref=e33]: 工具功能介绍
+      - listitem [ref=e34]: 7 天内
+      - listitem [ref=e35] [cursor=pointer]:
+        - generic [ref=e36]: 名字询问
+      - listitem [ref=e37] [cursor=pointer]:
+        - generic [ref=e38]: 会话 3
+      - listitem [ref=e39]: 更早
+      - listitem [ref=e40] [cursor=pointer]:
+        - generic [ref=e41]: template
+    - generic [ref=e42]:
+      - button "账户 admin" [ref=e45] [cursor=pointer]:
+        - generic [ref=e46]: A
+        - generic [ref=e47]: admin
+      - button "切换到浅色主题" [ref=e48] [cursor=pointer]:
+        - img [ref=e49]
+  - separator "拖拽调节会话列表宽度" [ref=e55]
+  - generic [ref=e56]:
+    - generic [ref=e57]: 意图识别切换工作流
+    - generic [ref=e58]:
+      - generic [ref=e60]:
+        - generic [ref=e62]: 用户
+        - button "⧉" [ref=e63] [cursor=pointer]
+        - generic [ref=e64]: 你好
+        - time [ref=e65]: 2026-6-9 11:50
+      - generic [ref=e67]:
+        - generic [ref=e69]: 回答助手
+        - button "⧉" [ref=e70] [cursor=pointer]
+        - paragraph [ref=e72]: 你好！有什么我可以帮你的吗？
+        - time [ref=e73]: 2026-6-9 11:50
+      - generic [ref=e75]:
+        - generic [ref=e77]: 用户
+        - button "⧉" [ref=e78] [cursor=pointer]
+        - generic [ref=e79]: 这个项目是做什么的/Users/chenlv/Project/MeetMind
+        - time [ref=e80]: 2026-6-9 11:50
+      - generic [ref=e82]:
+        - generic [ref=e84]: 架构师
+        - button "⧉" [ref=e85] [cursor=pointer]
+        - generic [ref=e86]:
+          - button "list_dir" [ref=e87] [cursor=pointer]:
+            - img [ref=e88]
+            - generic [ref=e90]: list_dir
+          - button "Read" [ref=e91] [cursor=pointer]:
+            - img [ref=e92]
+            - generic [ref=e94]: Read
+          - button "Read" [ref=e95] [cursor=pointer]:
+            - img [ref=e96]
+            - generic [ref=e98]: Read
+        - generic [ref=e99]:
+          - paragraph [ref=e100]:
+            - text: 这是一个
+            - strong [ref=e101]: 多 Agent RAG 协作系统
+            - text: （TypeScript 实现），模拟一个研发项目组：架构师、后端、前端、测试、产品经理 5 个 Agent，每个 Agent 拥有独立的 PostgreSQL 表、RAG 检索工具和 System Prompt，通过
+            - code [ref=e102]: next_agent
+            - text: 字段自由路由。
+          - paragraph [ref=e103]:
+            - text: 技术栈：
+            - strong [ref=e104]: LangChain + LangGraph + PostgreSQL（pgvector）+ 本地 Transformers.js
+            - text: 做 Embedding 和 Rerank，LLM 走 OpenAI 兼容协议。检索链路是 pg_trgm 关键字召回 + pgvector 向量检索 → 合并去重 → 本地 cross-encoder Rerank → top 5 给 LLM。
+          - paragraph [ref=e105]: 简单说，就是一个带本地 RAG 的多角色 AI 协作 Demo 项目。
+        - time [ref=e106]: 2026-6-9 11:50
+    - generic [ref=e108]:
+      - textbox "输入项目需求… (Enter 发送, Shift+Enter 换行)" [active] [ref=e109]
+      - button "上下文用量 0.4k / 256k (0%)" [ref=e111] [cursor=pointer]:
+        - img [ref=e112]
+      - generic [ref=e115]:
+        - button "发送" [ref=e116] [cursor=pointer]:
+          - generic [ref=e117]: 发送
+        - button "结束" [ref=e118] [cursor=pointer]
