@@ -12,15 +12,8 @@ yarn-error.log
 models/
 
 # IDE
-.idea/
-.vscode/
 *.swp
 *.swo
-.claude
-.cursor
-.understand-anything
-.playwright-mcp
-.codegraph
 
 # OS
 .DS_Store
