@@ -34,3 +34,12 @@ export function agentColor(agentName: string, theme: "light" | "dark" = "light")
   }
   return LIGHT_COLORS[agentName] ?? LIGHT_FALLBACK;
 }
+
+export function meetingTwinColor(index: number, theme: "light" | "dark"): Pick<AgentColor, "bg" | "fg"> {
+  // 沿色环按黄金角取色，让相邻加入的参会人的颜色也有明显区别。
+  const hue = (222 + index * 137.508) % 360;
+  if (theme === "dark") {
+    return { bg: `hsl(${hue} 36% 26%)`, fg: `hsl(${hue} 60% 89%)` };
+  }
+  return { bg: `hsl(${hue} 66% 92%)`, fg: `hsl(${hue} 55% 26%)` };
+}

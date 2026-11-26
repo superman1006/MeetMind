@@ -34,8 +34,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
 
 <template>
   <!-- 点遮罩空白处 = 取消;点对话框本体不冒泡 -->
-  <div class="overlay" @click="emit('cancel')">
-    <div class="dialog" @click.stop>
+  <div class="overlay popup-overlay" @click="emit('cancel')">
+    <div class="dialog popup-dialog" @click.stop>
       <h2 class="title">{{ title }}</h2>
       <p class="message">{{ message }}</p>
       <div class="actions">

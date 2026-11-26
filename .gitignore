@@ -27,3 +27,6 @@ logs/
 coverage/
 
 assets/*.mov
+
+# 运行时生成的会议纪要
+/data/summary/

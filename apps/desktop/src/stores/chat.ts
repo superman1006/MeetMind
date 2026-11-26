@@ -93,6 +93,7 @@ interface ChatState {
   pendingApprovalBySession: Record<string, PendingApproval | null>;
   // 各会话是否有崩溃残留的未完成轮可恢复（探测得到后置位；点「继续」/落定后清）。
   resumableBySession: Record<string, boolean>;
+  planVersionBySession: Record<string, number>;
 }
 
 export const useChatStore = defineStore("chat", {
@@ -103,6 +104,7 @@ export const useChatStore = defineStore("chat", {
     summaryBySession: {},
     pendingApprovalBySession: {},
     resumableBySession: {},
+    planVersionBySession: {},
   }),
   getters: {
     bubblesOf: (state) => (sessionId: string) => state.bubblesBySession[sessionId] ?? [],
@@ -118,11 +120,19 @@ export const useChatStore = defineStore("chat", {
         this.bubblesBySession[sessionId] = [];
       }
     },
-    addUser(sessionId: string, text: string): void {
+    // 递增版本号，通知计划面板重新获取服务端已保存的步骤与进度。
+    invalidatePlan(sessionId: string): void {
+      const version = this.planVersionBySession[sessionId] ?? 0;
+      this.planVersionBySession[sessionId] = version + 1;
+    },
+    addUser(sessionId: string, text: string, roundId?: string): void {
       this.ensure(sessionId);
-      const n = this.bubblesBySession[sessionId].length;
-      this.bubblesBySession[sessionId].push({
-        turnId: `user-${n}`,
+      const bubbles = this.bubblesBySession[sessionId];
+      // 会议事件带有轮次 ID，同一轮的用户消息只添加一次。
+      const turnId = `user-${roundId ?? bubbles.length}`;
+      if (bubbles.some((bubble) => bubble.turnId === turnId)) return;
+      bubbles.push({
+        turnId,
         agent_name: "user",
         role: "用户",
         text,
@@ -372,7 +382,7 @@ export const useChatStore = defineStore("chat", {
       this.ensure(sessionId);
       this.bubblesBySession[sessionId].push({
         turnId: `error-${this.bubblesBySession[sessionId].length}`,
-        agent_name: "architect",
+        agent_name: "system",
         role: "系统",
         text: `⚠️ ${message}`,
         isUser: false,

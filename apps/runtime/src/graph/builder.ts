@@ -349,6 +349,7 @@ export function buildGraph() {
     graph.addConditionalEdges(`${name}_node`, routeToWhichAgent, routeMap);
   }
 
+  // 原多 Agent 图由 checkpointer 按 thread_id 保存节点状态，供执行层接续。
   const compiled = graph.compile({ checkpointer: getCheckpointer() });
   // 按执行顺序完整列出图里所有节点：预处理流水线 → 左侧团队 5 个角色 → 右侧回答助手，
   // 与上面 addNode 的全集对齐（别只列 AGENT_NAMES，否则日志会漏掉改写 / 意图 / 分流 / 助手节点）。

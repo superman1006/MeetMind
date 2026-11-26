@@ -15,7 +15,8 @@ import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 
 import { getLogger } from "../utils/logger.js";
-import { authorizePath } from "./pathAuth.js";
+import type { RunnableConfig } from "@langchain/core/runnables";
+import { authorizePath, isMeetingSourceEntry } from "./pathAuth.js";
 
 const logger = getLogger("tools.glob");
 
@@ -83,6 +84,7 @@ async function walkAndMatch(
   baseDir: string,
   regex: RegExp,
   matched: string[],
+  meetingScope: boolean,
 ): Promise<void> {
   if (matched.length >= _MAX_RESULTS) {
     return;
@@ -92,12 +94,13 @@ async function walkAndMatch(
     if (matched.length >= _MAX_RESULTS) {
       return;
     }
+    if (meetingScope && (!isMeetingSourceEntry(entry.name) || entry.isSymbolicLink())) continue;
     const full = path.join(baseDir, entry.name);
     if (entry.isDirectory()) {
       if (_SKIP_DIRS.has(entry.name)) {
         continue;
       }
-      await walkAndMatch(searchRoot, full, regex, matched);
+      await walkAndMatch(searchRoot, full, regex, matched, meetingScope);
     } else {
       // 匹配「相对搜索根」的路径（用 / 分隔，跨平台统一）
       const rel = path.relative(searchRoot, full).split(path.sep).join("/");
@@ -109,7 +112,7 @@ async function walkAndMatch(
 }
 
 export const globTool = tool(
-  async ({ pattern, path: searchPath }: { pattern: string; path?: string | null }) => {
+  async ({ pattern, path: searchPath }: { pattern: string; path?: string | null }, config?: RunnableConfig) => {
     // 搜索根：不传则用项目根目录（传 "." 锚定到 PROJECT_ROOT）
     const base = searchPath ? searchPath : ".";
     logger.info(`glob 查找: pattern=${pattern} base=${base}`);
@@ -124,7 +127,7 @@ export const globTool = tool(
     try {
       const regex = globToRegExp(pattern);
       const matched: string[] = [];
-      await walkAndMatch(auth.abs, auth.abs, regex, matched);
+      await walkAndMatch(auth.abs, auth.abs, regex, matched, Boolean(config?.configurable?.meetingScope));
 
       if (matched.length === 0) {
         return `(没有匹配 ${pattern} 的文件)`;

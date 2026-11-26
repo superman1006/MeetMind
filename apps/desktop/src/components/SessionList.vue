@@ -5,11 +5,11 @@ import { useSessionsStore } from "../stores/sessions.js";
 import { useUiStore } from "../stores/ui.js";
 import { useChatStore } from "../stores/chat.js";
 import { useAuthStore } from "../stores/auth.js";
-import ConfirmDialog from "./ConfirmDialog.vue";
 import Tooltip from "./Tooltip.vue";
 import SessionSearch from "./SessionSearch.vue";
 import ModelSettings from "./ModelSettings.vue";
-import UserMemory from "./UserMemory.vue";
+import TwinSettings from "./TwinSettings.vue";
+import NewMeeting from "./NewMeeting.vue";
 import { groupSessionsByTime } from "../utils/sessionGroups.js";
 
 const sessions = useSessionsStore();
@@ -19,7 +19,10 @@ const auth = useAuthStore();
 
 // 会话按 created_at 新旧分到 5 个时间段(今天 / 昨天 / 7 天内 / 30 天内 / 更早),空段不显示。
 // 每次列表变化都重新分桶并取一次「现在」;段内顺序沿用服务端的 created_at DESC。
-const sessionGroups = computed(() => groupSessionsByTime(sessions.list, Date.now()));
+const showArchived = ref(false);
+const newMeetingOpen = ref(false);
+const visibleSessions = computed(() => sessions.list.filter((meeting) => Boolean(meeting.archived) === showArchived.value));
+const sessionGroups = computed(() => groupSessionsByTime(visibleSessions.value, Date.now()));
 
 // 用户名头像首字:取用户名第一个字符大写,登出胶囊 / rail 头像用。
 const avatarChar = computed(() => {
@@ -36,15 +39,15 @@ const settingsOpen = ref(false);
 // ---------- 账户菜单(头像点开的小弹层)+ 用户记忆窗口 ----------
 // 头像点击不再直接登出,而是弹出一个含「用户记忆」「退出登陆」两个按钮的 popover。
 const menuOpen = ref(false);
-const memoryOpen = ref(false);
+const twinSettingsOpen = ref(false);
 
 function toggleAccountMenu(): void {
   menuOpen.value = !menuOpen.value;
 }
 
-function openMemory(): void {
+function openTwinSettings(): void {
   menuOpen.value = false;
-  memoryOpen.value = true;
+  twinSettingsOpen.value = true;
 }
 
 // Esc 关闭账户菜单(记忆窗口自己另有 Esc 处理)。
@@ -117,25 +120,21 @@ function onRenameKeydown(e: KeyboardEvent): void {
   }
 }
 
-// ---------- 删除(自定义确认弹窗) ----------
-const pendingDelete = ref<{ id: string; title: string } | null>(null);
-
-function askDelete(id: string, title: string): void {
-  pendingDelete.value = { id, title };
+async function toggleArchive(id: string, archived: boolean): Promise<void> {
+  try {
+    await sessions.archive(id, archived);
+    ui.showToast(archived ? "会话已归档" : "已移回会话列表");
+    if (sessions.activeId === id) showArchived.value = archived;
+  } catch (error) {
+    ui.showToast(String(error));
+  }
 }
 
-async function confirmDelete(): Promise<void> {
-  const target = pendingDelete.value;
-  pendingDelete.value = null;
-  if (!target) {
-    return;
-  }
+async function logout(): Promise<void> {
   try {
-    await sessions.remove(target.id);
-    chat.drop(target.id);
-    ui.showToast("会话已删除");
-  } catch (e) {
-    console.error("[SessionList] 删除失败:", e);
+    await auth.logout();
+  } catch (error) {
+    ui.showToast(String(error));
   }
 }
 </script>
@@ -151,7 +150,7 @@ async function confirmDelete(): Promise<void> {
         </svg>
       </button>
     </Tooltip>
-    <Tooltip label="模型配置" placement="right">
+    <Tooltip v-if="auth.username === 'admin'" label="模型配置" placement="right">
       <button class="toggle" aria-label="模型配置" @click="settingsOpen = true">
         <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="3" />
@@ -167,9 +166,9 @@ async function confirmDelete(): Promise<void> {
             {{ avatarChar }}
           </button>
         </Tooltip>
-        <div v-if="menuOpen" class="user-menu rail-menu">
-          <button class="menu-item" @click="openMemory">用户记忆</button>
-          <button class="menu-item" @click="auth.logout()">退出登陆</button>
+        <div v-if="menuOpen" class="user-menu rail-menu popup-popover">
+          <button class="menu-item" @click="openTwinSettings">设置</button>
+          <button class="menu-item" @click="logout">退出登录</button>
         </div>
       </div>
       <button
@@ -201,7 +200,7 @@ async function confirmDelete(): Promise<void> {
     <div class="header">
       <span class="title">MeetMind</span>
       <div class="header-actions">
-        <Tooltip label="模型配置">
+        <Tooltip v-if="auth.username === 'admin'" label="模型配置">
           <button class="toggle" aria-label="模型配置" @click="settingsOpen = true">
             <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <circle cx="12" cy="12" r="3" />
@@ -227,7 +226,10 @@ async function confirmDelete(): Promise<void> {
         </Tooltip>
       </div>
     </div>
-    <button class="new" @click="sessions.newSession()">+ 新会话</button>
+    <button class="new" @click="newMeetingOpen = true">+ 新会话</button>
+    <button class="archive-toggle" :aria-pressed="showArchived" @click="showArchived = !showArchived">
+      {{ showArchived ? "返回会话列表" : "归档会话" }}
+    </button>
     <ul class="list">
       <!-- 按时间段分组:每段一个不可点的小标题,后跟该段的会话卡片 -->
       <template v-for="g in sessionGroups" :key="g.label">
@@ -250,8 +252,31 @@ async function confirmDelete(): Promise<void> {
           />
           <template v-else>
             <span class="name">{{ s.title }}</span>
-            <button class="icon" title="重命名会话" @click.stop="startRename(s.id, s.title)">✎</button>
-            <button class="icon" title="删除会话" @click.stop="askDelete(s.id, s.title)">×</button>
+            <button
+              v-if="s.isHost"
+              type="button"
+              class="session-action"
+              title="重命名会话"
+              aria-label="重命名会话"
+              @click.stop="startRename(s.id, s.title)"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="m14 6 4 4M4 20l1-5L17 3l4 4L9 19z" />
+              </svg>
+            </button>
+            <button
+              v-if="s.isHost"
+              type="button"
+              class="session-action"
+              :title="s.archived ? '取消归档' : '归档会话'"
+              :aria-label="s.archived ? '取消归档' : '归档会话'"
+              @click.stop="toggleArchive(s.id, !s.archived)"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path v-if="s.archived" d="m9 14-5-5 5-5M4 9h10a6 6 0 0 1 0 12h-2" />
+                <path v-else d="m6 6 12 12M18 6 6 18" />
+              </svg>
+            </button>
           </template>
         </li>
       </template>
@@ -265,9 +290,9 @@ async function confirmDelete(): Promise<void> {
             <span class="uname">{{ auth.username }}</span>
           </button>
         </Tooltip>
-        <div v-if="menuOpen" class="user-menu">
-          <button class="menu-item" @click="openMemory">用户记忆</button>
-          <button class="menu-item" @click="auth.logout()">退出登陆</button>
+        <div v-if="menuOpen" class="user-menu popup-popover">
+          <button class="menu-item" @click="openTwinSettings">设置</button>
+          <button class="menu-item" @click="logout">退出登录</button>
         </div>
       </div>
       <button
@@ -294,22 +319,16 @@ async function confirmDelete(): Promise<void> {
     </div>
   </aside>
 
-  <!-- 自定义删除确认弹窗(替代 window.confirm) -->
-  <ConfirmDialog
-    v-if="pendingDelete"
-    title="删除会话?"
-    :message="`「${pendingDelete.title}」将被永久删除，此操作不可撤销。`"
-    confirm-label="删除"
-    cancel-label="取消"
-    danger
-    @confirm="confirmDelete"
-    @cancel="pendingDelete = null"
+  <NewMeeting
+    v-if="newMeetingOpen"
+    @close="newMeetingOpen = false"
+    @created="newMeetingOpen = false; showArchived = false"
   />
 
   <!-- 会话标题搜索模态 -->
   <SessionSearch
     v-if="searchOpen"
-    :sessions="sessions.list"
+    :sessions="visibleSessions"
     @select="onPick"
     @close="searchOpen = false"
   />
@@ -320,11 +339,11 @@ async function confirmDelete(): Promise<void> {
   <!-- 账户菜单的透明背板:点菜单外部任意处关闭(收缩/展开态共用) -->
   <div v-if="menuOpen" class="menu-backdrop" @click="menuOpen = false" />
 
-  <!-- 用户记忆窗口 -->
-  <UserMemory v-if="memoryOpen" @close="memoryOpen = false" />
+  <TwinSettings v-if="twinSettingsOpen" @close="twinSettingsOpen = false" />
 </template>
 
 <style scoped>
+.archive-toggle { border: 0; background: none; color: var(--text-dim); text-align: left; cursor: pointer; padding: 5px 4px 9px; font-size: 12px; }
 /* 宽度由内联 style(ui.sidebarWidth)给,这里的 220px 仅作兜底;flex-shrink:0 不让对话区把它压扁。 */
 .sidebar { width: 220px; flex-shrink: 0; background: var(--bg-sidebar); color: var(--text-sidebar); display: flex; flex-direction: column; padding: 12px; box-sizing: border-box; transition: width 0.18s ease; }
 /* 拖拽中关掉 width 过渡,让侧栏宽度跟手不延迟。 */
@@ -354,10 +373,30 @@ async function confirmDelete(): Promise<void> {
 /* 选中态:强调色边框 + 淡强调底色,一眼可辨 */
 .list li.active { background: var(--accent-soft); border-color: var(--accent); }
 .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* 重命名 / 删除 共用的悬停小按钮 */
-.icon { visibility: hidden; background: transparent; color: var(--text-dim); border: none; border-radius: 6px; width: 22px; height: 22px; line-height: 1; font-size: 15px; cursor: pointer; flex-shrink: 0; }
-.list li:hover .icon { visibility: visible; }
-.icon:hover { background: var(--bg-sidebar); color: var(--text-main); }
+.session-action {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+}
+.session-action svg { width: 16px; height: 16px; }
+.list li:hover .session-action,
+.list li:focus-within .session-action { opacity: 1; pointer-events: auto; }
+.session-action:hover,
+.session-action:focus-visible { background: var(--bg-elevated); color: var(--text-main); }
+.session-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+@media (hover: none) {
+  .session-action { opacity: 1; pointer-events: auto; }
+}
 /* 行内重命名输入框 */
 .rename-input { flex: 1; min-width: 0; background: var(--bg-app); color: var(--text-main); border: 1px solid var(--accent); border-radius: 6px; padding: 5px 7px; font-size: 14px; font-family: inherit; outline: none; }
 /* 展开态底部一行:左下角用户名胶囊 + 右下角主题切换,space-between 顶到两端 */
@@ -372,7 +411,7 @@ async function confirmDelete(): Promise<void> {
 /* 账户菜单:圆角长方形弹层,浮在头像上方,内含两个圆角长方形按钮 */
 .user-menu { position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 50; display: flex; flex-direction: column; gap: 4px; min-width: 132px; padding: 6px; border-radius: 12px; background: var(--bg-elevated); border: 1px solid var(--border); box-shadow: var(--shadow-lift); }
 /* 收缩 rail 态:rail 很窄,菜单改浮到头像右侧 */
-.rail-menu { bottom: 0; left: calc(100% + 8px); }
+.rail-menu { bottom: 0; left: calc(100% + 8px); --popup-offset-x: -5px; --popup-offset-y: 0px; }
 .menu-item { text-align: left; background: var(--bg-card); color: var(--text-main); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; }
 .menu-item:hover { filter: brightness(1.08); border-color: var(--accent); }
 /* 透明全屏背板:点菜单外部关闭。z-index 低于 popover、高于侧栏内容 */

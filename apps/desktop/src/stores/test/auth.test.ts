@@ -33,21 +33,22 @@ describe("auth store register", () => {
   });
 });
 
-describe("auth store memory", () => {
-  it("getMemory:调 user.getMemory 带当前 username,返回 memory 文本", async () => {
-    rpcMock.mockResolvedValueOnce({ memory: "我喜欢简洁设计" });
+describe("auth store session", () => {
+  it("从服务器恢复登录账号", async () => {
+    rpcMock.mockResolvedValueOnce({ username: "alice" });
     const auth = useAuthStore();
-    auth.username = "alice";
-    const memory = await auth.getMemory();
-    expect(memory).toBe("我喜欢简洁设计");
-    expect(rpcMock).toHaveBeenCalledWith("user.getMemory", { username: "alice" });
+    await auth.initAuth();
+    expect(auth.loggedIn).toBe(true);
+    expect(auth.username).toBe("alice");
+    expect(rpcMock).toHaveBeenCalledWith("user.me", {});
   });
 
-  it("setMemory:调 user.setMemory 带当前 username 与新文本(空串合法)", async () => {
+  it("先从服务器撤销登录凭据，再退出界面", async () => {
     rpcMock.mockResolvedValueOnce({ ok: true });
     const auth = useAuthStore();
     auth.username = "alice";
-    await auth.setMemory("");
-    expect(rpcMock).toHaveBeenCalledWith("user.setMemory", { username: "alice", memory: "" });
+    await auth.logout();
+    expect(rpcMock).toHaveBeenCalledWith("user.logout", {});
+    expect(auth.username).toBe("");
   });
 });

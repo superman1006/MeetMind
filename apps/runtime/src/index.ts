@@ -23,4 +23,5 @@ const { startServer } = await import("./server/httpServer.js");
 await bootstrap();
 // 用可变 holder 包住 graph:model.set 热切换模型时会 buildGraph() 重建并换掉 holder.current。
 const graphHolder = { current: buildGraph() };
-startServer(graphHolder, 3002);
+const port = Number(process.env.MEETMIND_PORT || 3002);
+startServer(graphHolder, port);

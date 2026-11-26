@@ -19,7 +19,10 @@ import {
   pingDb,
   seedAdminUser,
 } from "./database/index.js";
+import { ensureTwinTables, applyDefaultCapabilities } from "./database/users/twins.js";
+import { ensureMeetingTables } from "./database/chat/meetingStore.js";
 import { initMcpTools } from "./tools/mcp/mcpClient.js";
+import { getDefaultCapabilities } from "./tools/capabilities.js";
 import { allTools } from "./tools/toolRegister.js";
 import { getLoadedSkills } from "./tools/skillTool.js";
 import { getCheckpointer } from "./graph/checkpointer.js";
@@ -69,7 +72,10 @@ export async function bootstrap(): Promise<void> {
   // ---------- 用户表（登录鉴权）+ 种子 admin ----------
   await ensureUserTable();
   await seedAdminUser();
-  printSystem(chalk.green("✓ 用户表已就绪（种子用户 admin/admin）"));
+  // 数字人和会议初始化会扩展已有表，因此放在基础会话表与用户表准备完成之后。
+  await ensureTwinTables();
+  await ensureMeetingTables();
+  printSystem(chalk.green("✓ 数字人账号、会议与任务计划表已就绪"));
 
   // ---------- 本地 Rerank ----------
   printSystem(
@@ -152,6 +158,18 @@ export async function bootstrap(): Promise<void> {
     printSystem(chalk.green(`✓ MCP 工具已加载：${mcpCount} 个（web 搜索经百度 AI Search MCP，工具名 AIsearch）`));
   } else {
     printSystem(chalk.dim("MCP 工具：未加载（未配置 BAIDU_SEARCH_API_KEY 或连接失败，web 搜索不可用）"));
+  }
+
+  // ---------- 内置账号补齐默认能力 ----------
+  // admin 与内置角色由种子逻辑创建，历史默认只有 rag_search；MCP 工具加载完成后
+  // 统一按当前工具 / skills 目录补齐，仅更新仍停留在历史默认值的账号。
+  const seedAccounts: string[] = ["admin"];
+  for (const name of AGENT_NAMES) {
+    seedAccounts.push(name);
+  }
+  for (const name of seedAccounts) {
+    const capabilities = getDefaultCapabilities(name);
+    await applyDefaultCapabilities(name, capabilities.tools, capabilities.skills);
   }
 
   // ---------- 展示已加载的 tools（本地 + 上面追加进同一数组的 MCP 工具，agent 构造时会 bindTools 它们） ----------

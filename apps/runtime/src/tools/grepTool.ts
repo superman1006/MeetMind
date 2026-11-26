@@ -14,7 +14,8 @@ import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 
 import { getLogger } from "../utils/logger.js";
-import { authorizePath } from "./pathAuth.js";
+import type { RunnableConfig } from "@langchain/core/runnables";
+import { authorizePath, isMeetingSourceEntry } from "./pathAuth.js";
 
 const logger = getLogger("tools.grep");
 
@@ -62,15 +63,16 @@ function includeToRegExp(glob: string): RegExp {
 }
 
 /** 从 baseDir 递归收集文件绝对路径，跳过 _SKIP_DIRS / 过大文件。 */
-async function walkFiles(baseDir: string, results: string[]): Promise<void> {
+async function walkFiles(baseDir: string, results: string[], meetingScope: boolean): Promise<void> {
   const entries = await readdir(baseDir, { withFileTypes: true });
   for (const entry of entries) {
+    if (meetingScope && (!isMeetingSourceEntry(entry.name) || entry.isSymbolicLink())) continue;
     const full = path.join(baseDir, entry.name);
     if (entry.isDirectory()) {
       if (_SKIP_DIRS.has(entry.name)) {
         continue;
       }
-      await walkFiles(full, results);
+      await walkFiles(full, results, meetingScope);
     } else {
       results.push(full);
     }
@@ -125,7 +127,7 @@ export const grepTool = tool(
     path?: string | null;
     include?: string | null;
     ignore_case?: boolean | null;
-  }) => {
+  }, config?: RunnableConfig) => {
     const base = searchPath ? searchPath : ".";
     logger.info(
       `grep 搜索: pattern=${pattern} base=${base} include=${include ?? "*"}`,
@@ -154,7 +156,7 @@ export const grepTool = tool(
 
     try {
       const allFiles: string[] = [];
-      await walkFiles(auth.abs, allFiles);
+      await walkFiles(auth.abs, allFiles, Boolean(config?.configurable?.meetingScope));
 
       const matches: string[] = [];
       for (const file of allFiles) {

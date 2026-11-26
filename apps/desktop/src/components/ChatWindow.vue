@@ -2,6 +2,7 @@
 import { computed, ref, watch, nextTick } from "vue";
 import { useChatStore, shouldShowTailThinking } from "../stores/chat.js";
 import type { StoredTurn } from "../stores/chat.js";
+import { useAuthStore } from "../stores/auth.js";
 import { useSessionsStore } from "../stores/sessions.js";
 import { rpc } from "../api/rpcClient.js";
 import { logUserAction } from "../api/logger.js";
@@ -11,22 +12,47 @@ import ToolApprovalBar from "./ToolApprovalBar.vue";
 import MeetingEndDialog from "./MeetingEndDialog.vue";
 import ConfirmDialog from "./ConfirmDialog.vue";
 import TypingDots from "./TypingDots.vue";
+import TaskPlanPanel from "./TaskPlanPanel.vue";
+import MeetingMinutesDialog from "./MeetingMinutesDialog.vue";
 
 const props = defineProps<{ sessionId: string }>();
 const chat = useChatStore();
+const auth = useAuthStore();
 const sessions = useSessionsStore();
+
+interface MeetingMember {
+  username: string;
+  agent_key?: string;
+  display_name: string;
+}
 
 const bubbles = computed(() => chat.bubblesOf(props.sessionId));
 const busy = computed(() => chat.isBusy(props.sessionId));
-const ended = computed(() => chat.isEnded(props.sessionId));
-// 顶部标题:在会话列表里按当前 sessionId 找标题(显式 for,house style)。
-const title = computed(() => {
-  for (const s of sessions.list) {
-    if (s.id === props.sessionId) {
-      return s.title;
-    }
+const meeting = computed(() => sessions.list.find((record) => record.id === props.sessionId));
+const ended = computed(() => Boolean(meeting.value?.ended || chat.isEnded(props.sessionId)));
+const canSend = computed(() => Boolean(meeting.value?.isHost && !meeting.value.archived));
+const planOpen = ref(false);
+const rosterOpen = ref(false);
+const sending = ref(false);
+const minutes = ref<{ filename: string; markdown: string } | null>(null);
+const title = computed(() => meeting.value?.title ?? "");
+const membersByUsername = ref(new Map<string, MeetingMember>());
+const viewerTwinKey = computed(() => membersByUsername.value.get(auth.username)?.agent_key);
+const viewerIsOwner = computed(() => meeting.value?.owner === auth.username);
+const requirementAuthor = computed(() => {
+  if (viewerIsOwner.value) return "你";
+  const owner = meeting.value?.owner;
+  return owner ? displayName(owner) : undefined;
+});
+const twinColorIndices = computed(() => {
+  const indices = new Map<string, number>();
+  // 实时回复和历史消息都带数字人标识，按首次发言顺序在本场会议内分配颜色。
+  for (const bubble of bubbles.value) {
+    const key = bubble.agent_name;
+    if (bubble.isUser || key === "system" || indices.has(key)) continue;
+    indices.set(key, indices.size);
   }
-  return "";
+  return indices;
 });
 const scroller = ref<HTMLElement | null>(null);
 // Composer 子组件引用:切换/新建会话时主动聚焦其输入框,让用户直接打字。
@@ -58,6 +84,26 @@ const contextUsed = computed(() => {
 
 // SSE 事件流已由 App.vue 全局订阅(单条 firehose,按 sessionId 路由),这里不再各自建连。
 
+function displayName(username: string): string {
+  return membersByUsername.value.get(username)?.display_name || username;
+}
+
+watch(() => props.sessionId, async (_, __, onCleanup) => {
+  let active = true;
+  onCleanup(() => { active = false; });
+  try {
+    const people = await rpc<MeetingMember[]>("twin.list", {});
+    if (!active) return;
+    const members = new Map<string, MeetingMember>();
+    for (const person of people) {
+      members.set(person.username, person);
+    }
+    membersByUsername.value = members;
+  } catch {
+    // 会话已经提供账号名单，目录暂时不可用时仍可展示。
+  }
+}, { immediate: true });
+
 // 打开会话时从 DB 拉历史填充气泡;讨论进行中(busy)则跳过,保留正在流式的本地气泡。
 async function loadHistory(sessionId: string): Promise<void> {
   if (!sessionId || chat.isBusy(sessionId)) {
@@ -65,7 +111,7 @@ async function loadHistory(sessionId: string): Promise<void> {
   }
   try {
     const turns = await rpc<StoredTurn[]>("session.messages", { sessionId });
-    chat.load(sessionId, turns);
+    if (!chat.isBusy(sessionId)) chat.load(sessionId, turns);
   } catch (e) {
     chat.addErrorBubble(sessionId, `加载历史失败: ${String(e)}`);
   }
@@ -73,7 +119,7 @@ async function loadHistory(sessionId: string): Promise<void> {
 
 // 打开会话时探测是否有可恢复的未完成轮；有则把崩溃前发言渲染出来并弹「继续」。
 async function checkResumable(sessionId: string): Promise<void> {
-  if (!sessionId || chat.isBusy(sessionId) || chat.isEnded(sessionId)) {
+  if (!canSend.value || !sessionId || chat.isBusy(sessionId) || chat.isEnded(sessionId)) {
     return;
   }
   try {
@@ -81,8 +127,8 @@ async function checkResumable(sessionId: string): Promise<void> {
       "chat.getResumable",
       { sessionId },
     );
-    if (res.resumable && res.pendingTurns && res.pendingTurns.length > 0) {
-      chat.setResumable(sessionId, res.pendingTurns);
+    if (res.resumable && props.sessionId === sessionId && !chat.isBusy(sessionId)) {
+      chat.setResumable(sessionId, res.pendingTurns ?? []);
     }
   } catch {
     // 探测失败静默忽略，不影响正常使用。
@@ -94,6 +140,8 @@ watch(
   () => props.sessionId,
   async (id) => {
     chat.ensure(id);
+    minutes.value = null;
+    rosterOpen.value = false;
     // 先 load（会整体替换气泡），再探测续跑（在其后追加崩溃前发言），顺序不能反。
     await loadHistory(id);
     // 每个 await 后校验会话没被切走：快速切换时晚到的 checkResumable 不能把 stale 数据写进别的会话。
@@ -123,29 +171,23 @@ watch(
 
 
 async function onSend(text: string): Promise<void> {
-  logUserAction("发送消息", { sessionId: props.sessionId, length: text.length });
-  // 是否本会话首条消息:addUser 前本地零气泡 = 新会话第一次发言(重开带历史的会话气泡非空)。
-  const isFirst = chat.bubblesOf(props.sessionId).length === 0;
-  chat.addUser(props.sessionId, text);
-  // 首条消息:并行 fire 一个标题摘要请求(不 await、不阻塞下面的 chat.send,与架构师讨论并行),
-  // 后端用 LLM 把输入总结成短标题并写库,拿到后回填前端会话标题。失败/空标题静默忽略,保留默认标题。
-  if (isFirst) {
-    const sid = props.sessionId;  // 捕获当前会话 id:请求在途时用户可能已切走,回填要认准这条会话。
-    rpc<{ ok: boolean; title?: string }>("chat.summaryTitle", { sessionId: sid, requirement: text })
-      .then((res) => {
-        if (res.ok && res.title) {
-          sessions.setTitle(sid, res.title);
-        }
-      })
-      .catch(() => {
-        // 标题摘要失败不影响讨论,什么都不做。
-      });
-  }
+  if (!canSend.value || sending.value || busy.value) return;
+  const sessionId = props.sessionId;
+  const isFirst = chat.bubblesOf(sessionId).length === 0 && title.value === "新会话";
+  sending.value = true;
   try {
-    //调用 rpcClient 发送POST 请求 需要调用的方法是 chat.send
-    await rpc("chat.send", { sessionId: props.sessionId, requirement: text });
-  } catch (e) {
-    chat.addErrorBubble(props.sessionId, String(e));
+    const requestId = globalThis.crypto?.randomUUID?.();
+    await rpc("chat.send", { sessionId, requirement: text, requestId });
+    if (isFirst) {
+      void rpc<{ ok: boolean; title?: string }>("chat.summaryTitle", { sessionId, requirement: text })
+        .then((res) => { if (res.title) sessions.setTitle(sessionId, res.title); })
+        .catch(() => {});
+    }
+  } catch (failure) {
+    chat.addErrorBubble(sessionId, String(failure));
+    await checkResumable(sessionId);
+  } finally {
+    sending.value = false;
   }
 }
 
@@ -189,14 +231,39 @@ async function onDiscard(): Promise<void> {
 
 // 结束会议:弹出整理中弹窗,调 chat.end;后续进度/结果由 SSE 的 summary_* 事件驱动弹窗更新。
 async function onEnd(): Promise<void> {
-  logUserAction("结束会议", { sessionId: props.sessionId });
-  // 点结束即标记会话结束:此后该会话回车/点发送会被 Composer 拦截 → onBlocked 弹提示。
-  chat.markEnded(props.sessionId);
-  chat.openSummary(props.sessionId);
+  if (!canSend.value || busy.value || ended.value) return;
+  const id = props.sessionId;
+  chat.openSummary(id);
   try {
-    await rpc("chat.end", { sessionId: props.sessionId });
-  } catch (e) {
-    chat.setSummaryError(props.sessionId, String(e));
+    await rpc("chat.end", { sessionId: id });
+    chat.markEnded(id);
+    await sessions.load();
+  } catch (error) {
+    chat.setSummaryError(id, String(error));
+  }
+}
+
+async function retryMinutes(): Promise<void> {
+  const id = props.sessionId;
+  chat.openSummary(id);
+  try {
+    await rpc("chat.retrySummary", { sessionId: id });
+    await sessions.load();
+  } catch (error) {
+    chat.setSummaryError(id, String(error));
+  }
+}
+
+async function openMinutes(): Promise<void> {
+  const id = props.sessionId;
+  try {
+    const result = await rpc<{ filename: string; markdown: string } | null>("chat.minutes", { sessionId: id });
+    if (props.sessionId === id) {
+      chat.closeSummary(id);
+      minutes.value = result;
+    }
+  } catch (error) {
+    chat.setSummaryError(id, String(error));
   }
 }
 
@@ -238,19 +305,60 @@ async function onApprovalDecide(approved: boolean): Promise<void> {
 
 <template>
   <section class="chat">
-    <header class="chat-header">{{ title }}</header>
-    <div ref="scroller" class="scroll">
-      <!-- 新建会话、用户还没发首条消息:正中间给一句占位提示,而不是空白 -->
-      <div v-if="bubbles.length === 0 && !showThinking" class="empty-hint">请输入需求后开始会议</div>
-      <MessageBubble v-for="b in bubbles" :key="b.turnId" :bubble="b" />
-      <div v-if="showThinking" class="row">
-        <div class="thinking-bubble">
-          <span class="thinking-label">思考中</span>
-          <TypingDots />
+    <header class="chat-header">
+      <div class="header-main">
+        <div class="header-title">
+          <span>{{ title }}</span><small>{{ ended ? "已结束" : "会议中" }}{{ meeting?.archived ? " · 已归档" : "" }}</small>
+          <button
+            v-if="meeting?.owner"
+            type="button"
+            class="roster-toggle"
+            :aria-expanded="rosterOpen"
+            aria-controls="meeting-roster"
+            @click="rosterOpen = !rosterOpen"
+          >
+            参会人员 <span class="roster-chevron" aria-hidden="true"></span>
+          </button>
+        </div>
+        <div class="header-tools">
+          <button v-if="meeting?.minutesFilename" @click="openMinutes">会议纪要</button>
+          <button v-else-if="meeting?.isHost && ['pending', 'failed'].includes(meeting.minutesStatus ?? '')" @click="retryMinutes">重试纪要</button>
+          <button type="button" :aria-expanded="planOpen" aria-controls="meeting-task-plan" @click="planOpen = !planOpen">任务计划</button>
+        </div>
+      </div>
+      <ul v-if="meeting?.owner" v-show="rosterOpen" id="meeting-roster" class="meeting-roster popup-popover" role="list" aria-label="参会名单">
+        <li class="roster-person">
+          <span>{{ displayName(meeting.owner) }}</span>
+          <small>主持人</small>
+        </li>
+        <li v-for="username in meeting.participants" :key="username" class="roster-person">
+          <span>{{ displayName(username) }}</span>
+        </li>
+        <li v-if="!meeting.participants?.length" class="roster-empty">无其他参会人员</li>
+      </ul>
+      <TaskPlanPanel v-if="planOpen" id="meeting-task-plan" :session-id="sessionId" @close="planOpen = false" />
+    </header>
+    <div class="chat-content">
+      <div ref="scroller" class="scroll">
+        <!-- 新建会话、用户还没发首条消息:正中间给一句占位提示,而不是空白 -->
+        <div v-if="bubbles.length === 0 && !showThinking" class="empty-hint">{{ canSend ? "请输入需求后开始会议" : "等待主持人发起讨论" }}</div>
+        <MessageBubble
+          v-for="b in bubbles"
+          :key="b.turnId"
+          :bubble="b"
+          :mine="b.isUser ? viewerIsOwner : b.agent_name === viewerTwinKey"
+          :sender-label="b.isUser ? requirementAuthor : undefined"
+          :twin-color-index="twinColorIndices.get(b.agent_name)"
+        />
+        <div v-if="showThinking" class="row">
+          <div class="thinking-bubble">
+            <span class="thinking-label">思考中</span>
+            <TypingDots />
+          </div>
         </div>
       </div>
     </div>
-    <div v-if="resumable && !busy && !ended" class="resume-bar" role="status" aria-live="polite">
+    <div v-if="canSend && resumable && !busy && !ended" class="resume-bar" role="status" aria-live="polite">
       <span class="resume-text">上一轮讨论未完成（可能因服务重启中断），请选择继续或放弃后再输入。</span>
       <div class="resume-actions">
         <button class="resume-btn discard" @click="onDiscard">放弃</button>
@@ -258,14 +366,15 @@ async function onApprovalDecide(approved: boolean): Promise<void> {
       </div>
     </div>
     <ToolApprovalBar
-      v-if="pendingApproval"
+      v-if="canSend && pendingApproval"
       :tool="pendingApproval.tool"
       :risk="pendingApproval.risk"
       @decide="onApprovalDecide"
     />
     <Composer
+      v-if="canSend"
       ref="composer"
-      :busy="busy"
+      :busy="busy || sending"
       :ended="ended"
       :locked="resumable && !busy && !ended"
       :context-used="contextUsed"
@@ -275,6 +384,7 @@ async function onApprovalDecide(approved: boolean): Promise<void> {
       @blocked="onBlocked"
       @compact="onCompact"
     />
+    <div v-else class="read-only">{{ meeting?.archived ? "已归档，可查看历史" : "参与者 · 只读" }}</div>
     <MeetingEndDialog
       v-if="summary.open"
       :status="summary.status"
@@ -282,6 +392,7 @@ async function onApprovalDecide(approved: boolean): Promise<void> {
       :detail="summary.detail"
       @close="chat.closeSummary(props.sessionId)"
     />
+    <MeetingMinutesDialog v-if="minutes" v-bind="minutes" @close="minutes = null" />
     <ConfirmDialog
       v-if="endedNotice"
       title="会话已结束"
@@ -295,9 +406,56 @@ async function onApprovalDecide(approved: boolean): Promise<void> {
 </template>
 
 <style scoped>
-.chat { flex: 1; display: flex; flex-direction: column; height: 100vh; }
-/* 顶部会话标题栏(仿 Claude 桌面端):纤细、左对齐、底部分隔线 */
-.chat-header { padding: 12px 16px; font-size: 15px; font-weight: 600; color: var(--text-main); background: var(--bg-chat); border-bottom: 1px solid var(--border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 0; }
+.chat { flex: 1; display: flex; flex-direction: column; height: 100vh; min-width: 0; }
+.chat-header { position: relative; z-index: 5; padding: 8px 16px; color: var(--text-main); background: var(--bg-chat); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.header-main { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; }
+.header-title { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.header-title > span { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.header-title small { color: var(--text-dim); font-size: 11px; white-space: nowrap; }
+.roster-toggle { display: inline-flex; align-items: center; gap: 7px; flex-shrink: 0; padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-elevated); color: var(--text-main); cursor: pointer; font-size: 12px; white-space: nowrap; }
+.roster-chevron { width: 5px; height: 5px; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor; transform: translateY(-1px) rotate(45deg); }
+.roster-toggle[aria-expanded="true"] { border-color: var(--accent); }
+.roster-toggle[aria-expanded="true"] .roster-chevron { transform: translateY(1px) rotate(225deg); }
+.header-tools { display: flex; gap: 7px; flex-shrink: 0; }
+.meeting-roster {
+  --popup-origin: top left;
+  --popup-offset-y: -5px;
+  position: absolute;
+  top: calc(100% + 5px);
+  left: 16px;
+  width: calc(min(280px, 100% - 32px) * 2 / 3);
+  max-height: min(50vh, 320px);
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 8px;
+  overflow-y: auto;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-chat);
+  box-shadow: var(--shadow-lift);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.roster-person {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 34px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  overflow-wrap: anywhere;
+}
+.roster-person small { color: var(--text-dim); flex-shrink: 0; }
+.roster-empty { padding: 1px 10px; color: var(--text-dim); }
+.chat-content { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; overflow-x: clip; }
+.header-tools button { border: 1px solid var(--border); border-radius: 6px; background: var(--bg-elevated); color: var(--text-main); padding: 6px 8px; cursor: pointer; }
+.header-tools button[aria-expanded="true"] { border-color: var(--accent); }
+.read-only { padding: 10px 16px; color: var(--text-dim); background: var(--bg-chat); border-top: 1px solid var(--border); font-size: 12px; }
 .scroll { flex: 1; overflow-y: auto; padding: 16px; background: var(--bg-chat); }
 /* 空会话占位:撑满滚动区高度,水平 + 垂直居中 */
 .empty-hint { height: 100%; display: flex; align-items: center; justify-content: center; color: var(--text-dim); font-size: 15px; }

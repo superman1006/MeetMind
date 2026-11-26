@@ -6,11 +6,19 @@
 import type { ServerResponse } from "node:http";
 
 // 所有打开的 SSE 连接(不分会话);单窗口前端通常只有一条,多开窗口/标签时可能多条。
-const clients = new Set<ServerResponse>();
+const clients = new Map<ServerResponse, { username: string; token: string } | null>();
 
 // 登记一条新的 SSE 连接。
-export function addClient(res: ServerResponse): void {
-  clients.add(res);
+export function addClient(res: ServerResponse, username?: string, token?: string): void {
+  clients.set(res, username && token ? { username, token } : null);
+}
+
+export function closeLoginClients(token: string): void {
+  for (const [response, account] of clients) {
+    if (account?.token !== token) continue;
+    clients.delete(response);
+    response.end();
+  }
 }
 
 // 连接关闭时把它移除,别让登记表越积越大。
@@ -20,7 +28,7 @@ export function removeClient(res: ServerResponse): void {
 
 // 往所有连接推一条 SSE 事件(服务器主动推送的核心动作);sessionId 拼进帧体,前端据此判断这条事件属于哪个会话。
 // 没有任何连接时静默忽略、不报错。
-export function send(sessionId: string, event: string, data: unknown): void {
+export function send(sessionId: string, event: string, data: unknown, audience?: readonly string[]): void {
   if (clients.size === 0) {
     return;
   }
@@ -29,7 +37,9 @@ export function send(sessionId: string, event: string, data: unknown): void {
   // 按 SSE 固定文本格式拼这一帧:event 行 + data 行(数据序列化成 JSON)+ 一个空行表示这条结束。
   const payload = `event: ${event}\ndata: ${JSON.stringify(framed)}\n\n`;
   // 写给每一条连接。
-  for (const res of clients) {
+  for (const [res, account] of clients) {
+    if (audience && (!account || !audience.includes(account.username))) continue;
+    if (!audience && account) continue;
     res.write(payload);
   }
 }

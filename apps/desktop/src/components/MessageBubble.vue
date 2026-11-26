@@ -1,15 +1,24 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import type { Bubble } from "../stores/chat.js";
-import { agentColor } from "../theme/agentColors.js";
+import { agentColor, meetingTwinColor } from "../theme/agentColors.js";
 import { useUiStore } from "../stores/ui.js";
 import { renderMarkdown } from "../utils/markdown.js";
 import TypingDots from "./TypingDots.vue";
 
-const props = defineProps<{ bubble: Bubble }>();
+const props = defineProps<{
+  bubble: Bubble;
+  mine: boolean;
+  senderLabel?: string;
+  twinColorIndex?: number;
+}>();
 const ui = useUiStore();
-// 气泡配色随主题走:浅色用浅底深字,深色用深底亮字。切主题时 ui.theme 变 → 这里自动重算。
-const color = computed(() => agentColor(props.bubble.agent_name, ui.theme));
+const color = computed(() => {
+  const fallback = agentColor(props.bubble.agent_name, ui.theme);
+  if (props.twinColorIndex === undefined) return fallback;
+  const tint = meetingTwinColor(props.twinColorIndex, ui.theme);
+  return { ...fallback, ...tint };
+});
 
 // agent 回复带 Markdown 语法(## 标题、列表、代码块等),渲染成已净化的 HTML 再用 v-html 显示。
 // 用户气泡保持纯文本(不把用户输入当 Markdown 解析)。流式输出时 text 每变一次就重渲染一次。
@@ -91,13 +100,12 @@ async function copyToolCall(): Promise<void> {
 </script>
 
 <template>
-  <div class="row" :class="{ mine: bubble.isUser }">
-    <div class="bubble" :style="{ background: color.bg, color: color.fg }">
-      <div class="head">
-        <span class="role">{{ bubble.role || color.label }}</span>
-      </div>
-
-      <!-- 右上角复制按钮:平时半透明很淡,hover 气泡时浮现,点一下复制本气泡正文 -->
+  <div class="row" :class="{ mine }" :style="{ '--message-bg': color.bg, color: color.fg }">
+    <div class="head">
+      <span class="role">{{ senderLabel ?? (bubble.role || color.label) }}</span>
+    </div>
+    <div class="bubble">
+      <!-- 复制按钮在气泡右上角，悬停或聚焦时显示。 -->
       <button
         v-if="!thinking"
         type="button"
@@ -130,7 +138,7 @@ async function copyToolCall(): Promise<void> {
       <div v-else class="text markdown" v-html="renderedHtml"></div>
 
       <!-- 工具调用结果面板:点某个按钮后在正文下方展开,显示入参 + 返回结果 -->
-      <div v-if="openCall" class="tool-panel">
+      <div v-if="openCall" class="tool-panel popup-popover">
         <!-- 工具信息面板右上角也放一个复制按钮:复制本次调用的名字 + 入参 + 返回结果 -->
         <button
           type="button"
@@ -145,18 +153,46 @@ async function copyToolCall(): Promise<void> {
         <pre class="tool-panel-result">{{ openCall.result }}</pre>
       </div>
 
-      <!-- 消息发送时间:思考中(还没出内容)不显示,有内容后挂在气泡底部 -->
-      <time v-if="!thinking" class="time">{{ sentAt }}</time>
+      <time v-if="!thinking && !mine" class="time">{{ sentAt }}</time>
     </div>
+    <!-- 右侧时间单独占一行，让短消息的气泡宽度随正文变化。 -->
+    <time v-if="!thinking && mine" class="time">{{ sentAt }}</time>
   </div>
 </template>
 
 <style scoped>
-.row { display: flex; margin: 8px 0; }
-.row.mine { justify-content: flex-end; }
-.bubble { position: relative; max-width: 72%; padding: 10px 12px; border-radius: 12px; white-space: pre-wrap; word-break: break-word; }
+.row {
+  --message-inset: clamp(8px, 1.6vw, 18px);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  margin: 12px 0;
+  padding-inline-start: var(--message-inset);
+  text-align: left;
+}
+.row.mine { align-items: flex-end; padding-inline: 0 var(--message-inset); }
+.head, .bubble {
+  max-width: min(76%, 720px);
+  background: var(--message-bg);
+  border: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+  overflow-wrap: anywhere;
+}
+/* 用户名贴外侧，气泡和右侧时间一起向内缩进。 */
+.head {
+  margin-inline-start: calc(-1 * var(--message-inset));
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.row.mine .head { margin-inline: 0 calc(-1 * var(--message-inset)); }
+.bubble { position: relative; padding: 10px 36px 10px 12px; border-radius: 12px; white-space: pre-wrap; }
+.row.mine .bubble { width: fit-content; }
+@media (max-width: 640px) {
+  .head, .bubble { max-width: 90%; }
+}
 
-/* 复制按钮:小、淡、贴右上角。平时几乎隐形,hover 气泡时浮现,不抢正文注意力 */
 .copy-btn {
   position: absolute;
   top: 6px;
@@ -178,16 +214,16 @@ async function copyToolCall(): Promise<void> {
   transition: opacity 0.12s, background 0.12s;
 }
 .bubble:hover .copy-btn { opacity: 0.5; }
+.copy-btn:focus-visible { opacity: 1; }
 .copy-btn:hover { opacity: 1 !important; background: rgba(0, 0, 0, 0.12); }
 :root[data-theme="dark"] .copy-btn:hover { background: rgba(255, 255, 255, 0.16); }
-.head { display: flex; gap: 8px; align-items: center; font-size: 12px; opacity: 0.85; margin-bottom: 4px; }
 .role { font-weight: 600; }
 .text { font-size: 14px; line-height: 1.5; }
 
 /* Markdown 正文:容器要回到 normal 空白处理,否则继承 .bubble 的 pre-wrap 会把
    markdown-it 标签间的换行渲染成多余空行。子元素用 :deep() 穿透 scoped 作用域
    (v-html 生成的节点不带 scoped 的 data 属性,普通选择器选不到)。 */
-.markdown { white-space: normal; }
+.markdown { white-space: normal; overflow-x: auto; }
 .markdown :deep(> *:first-child) { margin-top: 0; }
 .markdown :deep(> *:last-child) { margin-bottom: 0; }
 .markdown :deep(h1) { font-size: 18px; font-weight: 700; margin: 12px 0 6px; }
@@ -244,6 +280,8 @@ async function copyToolCall(): Promise<void> {
 
 /* 结果面板:浅色内嵌卡片,结果超长可滚动 */
 .tool-panel {
+  --popup-origin: top center;
+  --popup-offset-y: -5px;
   position: relative;
   margin-top: 8px;
   border: 1px solid rgba(0, 0, 0, 0.15);
@@ -262,6 +300,7 @@ async function copyToolCall(): Promise<void> {
   max-height: 220px;
   overflow: auto;
   white-space: pre-wrap;
+  text-align: left;
   word-break: break-word;
   font-family: ui-monospace, monospace;
   font-size: 11.5px;
@@ -284,6 +323,7 @@ async function copyToolCall(): Promise<void> {
   background: rgba(255, 255, 255, 0.07);
 }
 
-/* 发送时间:小号、半透明,右对齐挂在气泡底部 */
-.time { display: block; margin-top: 4px; font-size: 10px; opacity: 0.6; text-align: right; }
+/* 发送时间跟随消息方向对齐。 */
+.time { display: block; font-size: 10px; opacity: 0.6; }
+.bubble .time { margin-top: 4px; }
 </style>

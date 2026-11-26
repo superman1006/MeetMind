@@ -12,6 +12,7 @@
  */
 
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
+import type { RunnableConfig } from "@langchain/core/runnables";
 import { ChatOpenAI } from "@langchain/openai";
 import { z } from "zod";
 
@@ -83,7 +84,7 @@ export function createRewriteNode() {
     name: "RewriteOutput",
   });
 
-  return async (state: AgentState): Promise<Partial<AgentState>> => {
+  return async (state: AgentState, config?: RunnableConfig): Promise<Partial<AgentState>> => {
     const original = cleanBadChars(state.requirement ?? "");
     // 空输入：不调模型，直接给空结果（下游会兜底回 requirement）
     if (!original.trim()) {
@@ -102,7 +103,7 @@ export function createRewriteNode() {
       const out = await structuredModel.invoke([
         new SystemMessage(SYSTEM_PROMPT),
         new HumanMessage(userPrompt),
-      ]);
+      ], config);
       // 改写结果为空时兜底回原始输入，保证 rewritten_query 永远可用
       const rewritten = (out.rewritten_query ?? "").trim() || original;
       const terms = (out.expansion_terms ?? "").trim();

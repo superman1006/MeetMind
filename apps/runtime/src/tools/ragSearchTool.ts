@@ -11,6 +11,7 @@ import type { RunnableConfig } from "@langchain/core/runnables";
 import { z } from "zod";
 
 import { getRetriever, type RetrievedDoc } from "../database/index.js";
+import type { RAGRetriever } from "../database/retrieval/rag_retriever.js";
 import { ARCHITECT } from "../config/constants.js";
 
 /** 把单条 RetrievedDoc 渲染成 LLM 友好的一行：- [type / date] content。 */
@@ -34,7 +35,8 @@ export const ragSearchTool = tool(
     // 调用方（BaseAgent）通过 config 传入自己的 agent 名；缺省兜底到 architect
     const agentName =
       (config?.configurable?.agentName as string | undefined) ?? ARCHITECT;
-    const retriever = getRetriever(agentName);
+    const scoped = config?.configurable?.retriever as RAGRetriever | undefined;
+    const retriever = scoped ?? getRetriever(agentName);
 
     // rewrite_node 产出的检索扩展词（同义 / 相关关键词）：有则拼到 LLM 给的 query 后面，
     // 让关键字召回 + 向量召回都拿到更丰富的 query 以提升召回；为空则按原 query 检索。

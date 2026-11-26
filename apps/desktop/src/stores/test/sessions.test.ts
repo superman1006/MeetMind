@@ -6,7 +6,6 @@ const rpcMock = vi.hoisted(() => vi.fn());
 vi.mock("../../api/rpcClient.js", () => ({ rpc: rpcMock }));
 
 import { useSessionsStore } from "../sessions.js";
-import { useAuthStore } from "../auth.js";
 
 beforeEach(() => {
   setActivePinia(createPinia());
@@ -14,8 +13,7 @@ beforeEach(() => {
 });
 
 describe("sessions store", () => {
-  it("load 带当前用户名拉列表;无选中时默认选第一个", async () => {
-    useAuthStore().username = "tester";
+  it("load 拉取当前登录账号的列表并优先选择未归档会议", async () => {
     rpcMock.mockResolvedValueOnce([
       { id: "a", title: "A", ended: false },
       { id: "b", title: "B", ended: false },
@@ -24,18 +22,17 @@ describe("sessions store", () => {
     await s.load();
     expect(s.list).toHaveLength(2);
     expect(s.activeId).toBe("a");
-    expect(rpcMock).toHaveBeenCalledWith("session.list", { username: "tester" });
+    expect(rpcMock).toHaveBeenCalledWith("session.list", {});
   });
 
-  it("newSession 带当前用户名新建后插到最前并选中,返回新 id", async () => {
-    useAuthStore().username = "tester";
+  it("newSession 提交参会名单并选中新建会议", async () => {
     rpcMock.mockResolvedValueOnce({ id: "new", title: "会话 1", ended: false });
     const s = useSessionsStore();
-    const id = await s.newSession();
+    const id = await s.newSession(["architect", "alice"], "会话 1");
     expect(id).toBe("new");
     expect(s.list[0].id).toBe("new");
     expect(s.activeId).toBe("new");
-    expect(rpcMock).toHaveBeenCalledWith("session.create", { title: "会话 1", username: "tester" });
+    expect(rpcMock).toHaveBeenCalledWith("session.create", { title: "会话 1", participants: ["architect", "alice"] });
   });
 
   it("select 切换 activeId", () => {
@@ -74,24 +71,14 @@ describe("sessions store", () => {
     expect(s.list[0].title).toBe("旧");
   });
 
-  it("remove:删当前会话后切到剩余第一个", async () => {
-    rpcMock.mockResolvedValue(undefined);
-    const s = useSessionsStore();
-    s.list = [{ id: "a", title: "A" }, { id: "b", title: "B" }];
-    s.activeId = "a";
-    await s.remove("a");
-    expect(rpcMock).toHaveBeenCalledWith("session.delete", { sessionId: "a" });
-    expect(s.list).toHaveLength(1);
-    expect(s.activeId).toBe("b");
-  });
-
-  it("remove:删光后 activeId 置空", async () => {
+  it("归档后保留会议和当前选中状态", async () => {
     rpcMock.mockResolvedValue(undefined);
     const s = useSessionsStore();
     s.list = [{ id: "a", title: "A" }];
     s.activeId = "a";
-    await s.remove("a");
-    expect(s.list).toHaveLength(0);
-    expect(s.activeId).toBe("");
+    await s.archive("a", true);
+    expect(rpcMock).toHaveBeenCalledWith("session.archive", { sessionId: "a", archived: true });
+    expect(s.list).toEqual([{ id: "a", title: "A", archived: true }]);
+    expect(s.activeId).toBe("a");
   });
 });

@@ -164,6 +164,7 @@ export class RAGRetriever {
     for (const row of merged) {
       sourceContents.push(row.content ?? "");
     }
+    // 重排结果的 index 指向同序送入的候选，可据此取回正文及其元数据。
     const reranked = await rerank(query, sourceContents, finalN);
 
     // 4) 按 rerank 顺序拼 RetrievedDoc

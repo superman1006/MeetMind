@@ -4,6 +4,8 @@ import { useSessionsStore } from "./stores/sessions.js";
 import { useChatStore } from "./stores/chat.js";
 import { useAuthStore } from "./stores/auth.js";
 import { useUiStore } from "./stores/ui.js";
+import { rpc } from "./api/rpcClient.js";
+import type { StoredTurn } from "./stores/chat.js";
 import { openEvents } from "./api/sseClient.js";
 import SessionList from "./components/SessionList.vue";
 import ChatWindow from "./components/ChatWindow.vue";
@@ -38,16 +40,37 @@ function startResize(e: PointerEvent): void {
 let es: EventSource | null = null;
 function subscribeEvents(): void {
   es = openEvents({
+    onConnected: () => void refreshSessions(true),
+    onRoundStart: (p) => {
+      if (p.resume) chat.beginResume(p.sessionId);
+      else chat.addUser(p.sessionId, p.requirement, p.roundId);
+      chat.invalidatePlan(p.sessionId);
+    },
+    onPlanUpdated: (p) => chat.invalidatePlan(p.sessionId),
+    onSessionUpdated: () => void refreshSessions(),
     onTurnStart: (p) => chat.startTurn(p.sessionId, p.turnId, p.agent_name, p.role),
     onDelta: (p) => chat.appendDelta(p.sessionId, p.turnId, p.text),
     onUsingTools: (p) => chat.useTool(p.sessionId, p.turnId, p.tool),
     onToolResult: (p) => chat.addToolCall(p.sessionId, p.turnId, { name: p.name, args: p.args, result: p.result }),
     onToolApprovalRequest: (p) => chat.setPendingApproval(p.sessionId, { turnId: p.turnId, approvalId: p.approvalId, tool: p.tool, risk: p.risk }),
     onTurnEnd: (p) => chat.endTurn(p.sessionId, p.turnId, p.used_rag),
-    onRoundDone: (p) => chat.finishRound(p.sessionId),
-    onError: (p) => chat.addErrorBubble(p.sessionId, p.message),
-    onSummaryDone: (p) => chat.setSummaryDone(p.sessionId, p.file),
-    onSummaryError: (p) => chat.setSummaryError(p.sessionId, p.message),
+    onRoundDone: (p) => {
+      chat.finishRound(p.sessionId);
+      chat.invalidatePlan(p.sessionId);
+      void refreshHistory(p.sessionId);
+    },
+    onError: (p) => {
+      chat.addErrorBubble(p.sessionId, p.message);
+      chat.invalidatePlan(p.sessionId);
+    },
+    onSummaryDone: (p) => {
+      chat.setSummaryDone(p.sessionId, p.file);
+      void refreshSessions();
+    },
+    onSummaryError: (p) => {
+      chat.setSummaryError(p.sessionId, p.message);
+      void refreshSessions();
+    },
   });
 }
 
@@ -59,25 +82,50 @@ function unsubscribeEvents(): void {
   }
 }
 
-// 登录后初始化会话界面:先开事件流,再从服务端拉会话列表;一个都没有再建一个,避免空屏。
-// 已开过(es 非空)则跳过,避免重复订阅。
-async function enterSession(): Promise<void> {
-  if (es) {
-    return;
-  }
-  subscribeEvents();
-  await sessions.load();
-  // 把后端持久化的「已结束」状态灌进 chat store,刷新/重启后已结束的会议仍锁定。
-  chat.hydrateEnded(sessions.list);
-  if (sessions.list.length === 0) {
-    await sessions.newSession();
+// 请求返回时再次核对账号和会话忙碌状态，避免历史记录覆盖正在推送的气泡。
+async function refreshHistory(sessionId: string): Promise<void> {
+  const username = auth.username;
+  try {
+    const turns = await rpc<StoredTurn[]>("session.messages", { sessionId });
+    if (username && auth.username === username && !chat.isBusy(sessionId)) chat.load(sessionId, turns);
+  } catch (error) {
+    if (auth.loggedIn) ui.showToast(String(error));
   }
 }
 
-// 登出:断开 SSE,丢掉本地会话选中态(列表数据保留在 store,下次登录会 load 覆盖)。
+// SSE 连上或重连时对照服务端状态，补齐错过的历史、会话状态和恢复入口。
+async function refreshSessions(refreshActive = false): Promise<void> {
+  try {
+    await sessions.load();
+    chat.hydrateEnded(sessions.list);
+    if (refreshActive && auth.loggedIn) {
+      const id = sessions.activeId;
+      const active = sessions.list.find((meeting) => meeting.id === id);
+      if (!active) return;
+      chat.invalidatePlan(id);
+      if (!active.running) chat.finishRound(id);
+      if (!chat.isBusy(id)) await refreshHistory(id);
+      if (active.running && !chat.isBusy(id)) chat.beginResume(id);
+      if (!active.running && active.isHost && !active.ended && !active.archived) {
+        const state = await rpc<{ resumable: boolean }>("chat.getResumable", { sessionId: id });
+        if (state.resumable && !chat.isBusy(id)) chat.setResumable(id, []);
+      }
+    }
+  } catch (error) {
+    if (auth.loggedIn) ui.showToast(String(error));
+  }
+}
+
+async function enterSession(): Promise<void> {
+  if (es) return;
+  subscribeEvents();
+  await refreshSessions();
+}
+
 function leaveSession(): void {
   unsubscribeEvents();
-  sessions.activeId = "";
+  sessions.$reset();
+  chat.$reset();
 }
 
 // 监听登录态:已登录(含刷新后从 localStorage 恢复)→ 进会话界面;登出 → 收尾。

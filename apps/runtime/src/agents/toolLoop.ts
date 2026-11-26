@@ -18,6 +18,8 @@ import type { Runnable } from "@langchain/core/runnables";
 import { getLogger } from "../utils/logger.js";
 import { allTools } from "../tools/toolRegister.js";
 import type { ToolCallRecord } from "./base.js";
+import type { StructuredToolInterface } from "@langchain/core/tools";
+import type { RAGRetriever } from "../database/retrieval/rag_retriever.js";
 
 const logger = getLogger("agents.toolLoop");
 
@@ -28,6 +30,10 @@ export const MAX_TOOL_ITERATIONS = 10;
 export interface ToolLoopOptions {
   // 打日志用的调用方名字（如 architect / assistant）。
   callerName: string;
+  tools?: readonly StructuredToolInterface[];
+  signal?: AbortSignal;
+  retriever?: RAGRetriever;
+  prepareToolArgs?: (name: string, args: Record<string, unknown>) => Promise<Record<string, unknown> | null>;
   // 透传给工具的 agent 名：rag_search 据此查对应私有表（助手无私有表时检索自然返回空，已降级处理）。
   agentName: string;
   // rewrite_node 产出的检索扩展词，经 config 透传给 rag_search 拼到 query 后面提升召回。
@@ -64,7 +70,7 @@ export async function runToolLoop(
   // finalText：模型主动停手那轮的纯文本回答；只有干净收尾（无 tool_call）时才有值。
   let finalText = "";
   for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
-    const aiMsg = (await modelWithTools.invoke(messages)) as AIMessage;
+    const aiMsg = (await modelWithTools.invoke(messages, { signal: opts.signal })) as AIMessage;
     messages.push(aiMsg);
 
     // 模型不再要工具，结束循环
@@ -83,7 +89,7 @@ export async function runToolLoop(
 
       // 按名字从工具列表里找到要执行的工具
       let toolToRun = undefined;
-      for (const t of allTools) {
+      for (const t of opts.tools ?? allTools) {
         if (t.name === toolName) {
           toolToRun = t;
           break;
@@ -103,9 +109,13 @@ export async function runToolLoop(
         continue;
       }
 
-      logger.info(
-        `[${opts.callerName}] → 调用工具 ${toolName} args=${JSON.stringify(toolArgs)}`,
-      );
+      // 会议数字人可在调用前校验并规范化参数。返回空值时只给模型回传一次拒绝结果。
+      const args = opts.prepareToolArgs ? await opts.prepareToolArgs(toolName, toolArgs) : toolArgs;
+      if (!args) {
+        messages.push(new ToolMessage({ content: "(当前数字人无权使用该参数)", tool_call_id: toolId }));
+        continue;
+      }
+      logger.info(`[${opts.callerName}] → 调用工具 ${toolName}`);
       // 工具的 risk 等级（自定义元数据，见各 *Tool.ts）；缺省视为 low。
       const toolMeta = (toolToRun as { metadata?: Record<string, unknown> }).metadata;
       const risk = (toolMeta?.risk as string | undefined) ?? "low";
@@ -115,7 +125,7 @@ export async function runToolLoop(
         approved = await opts.onToolApproval({
           toolName,
           risk,
-          args: toolArgs as Record<string, unknown>,
+          args,
         });
       }
       let toolResult: string;
@@ -125,12 +135,16 @@ export async function runToolLoop(
         toolResult = "(用户拒绝使用该工具)";
       } else {
         // 工具执行前通知前端显示 "UsingTools: <工具名>" 标签
+        opts.signal?.throwIfAborted();
         opts.onToolUse?.(toolName);
         // 通过 config 把 agent 名 + 检索扩展词传给工具
         // （rag_search 据 agentName 查对应私有表、据 expansionTerms 扩展 query；其它工具忽略）
-        const out = await toolToRun.invoke(toolArgs, {
+        const out = await toolToRun.invoke(args, {
+          signal: opts.signal,
           configurable: {
             agentName: opts.agentName,
+            retriever: opts.retriever,
+            meetingScope: Boolean(opts.prepareToolArgs),
             expansionTerms: opts.expansionTerms ?? "",
           },
         });
@@ -140,7 +154,7 @@ export async function runToolLoop(
       // 记下这次调用的明细(name/args/result)：收集起来落库，并实时回调给前端加按钮
       const record: ToolCallRecord = {
         name: toolName,
-        args: toolArgs as Record<string, unknown>,
+        args,
         result: toolResult,
       };
       records.push(record);

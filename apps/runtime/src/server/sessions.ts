@@ -11,6 +11,13 @@ export function isBusy(sessionId: string): boolean {
   return busySessions.has(sessionId);
 }
 
+/** 在第一次 await 前占用会话，避免同一轮被同时继续、放弃或覆盖。 */
+export function claimSession(sessionId: string): boolean {
+  if (busySessions.has(sessionId)) return false;
+  busySessions.add(sessionId);
+  return true;
+}
+
 /** 置位/清位 busy 标记。 */
 export function setBusy(sessionId: string, busy: boolean): void {
   if (busy) {

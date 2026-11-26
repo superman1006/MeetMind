@@ -104,8 +104,8 @@ async function onSave(): Promise<void> {
 
 <template>
   <!-- 点遮罩空白处 = 关闭(保存/测试中不关);点对话框本体不冒泡 -->
-  <div class="overlay" @click="!saving && !testing && emit('close')">
-    <div class="dialog" @click.stop>
+  <div class="overlay popup-overlay" @click="!saving && !testing && emit('close')">
+    <div class="dialog popup-dialog" @click.stop>
       <h2 class="title">模型配置</h2>
       <p class="hint">配置 OpenAI 兼容接口。保存后 runtime 会用新模型,下一轮讨论生效。</p>
 

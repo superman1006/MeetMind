@@ -77,8 +77,7 @@ export async function ensureExtensions(): Promise<void> {
  * 第一次调用会用 vector + text + jsonb 混合 schema 建表，并建好向量 / 关键字两类索引；
  * 已存在则什么都不做（幂等）。
  */
-export async function ensureAgentTable(agentName: string): Promise<string> {
-  const pool = getPgPool();
+export async function ensureAgentTable(agentName: string, pool: pg.Pool | pg.PoolClient = getPgPool()): Promise<string> {
   const tableName = getTableName(agentName);
 
   // 向量维度由 embedding 模型决定，建表时必须先知道

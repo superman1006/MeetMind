@@ -1,0 +1,48 @@
+@media (prefers-reduced-motion: no-preference) {
+  :root {
+    --popup-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .popup-dialog {
+    animation: popup-dialog-in 220ms var(--popup-ease-out);
+  }
+
+  .popup-overlay,
+  dialog.popup-dialog[open]::backdrop {
+    animation: popup-backdrop-in 180ms ease-out;
+  }
+
+  .popup-popover {
+    transform-origin: var(--popup-origin, bottom left);
+    animation: popup-popover-in 160ms var(--popup-ease-out);
+  }
+
+  .popup-drawer {
+    animation: popup-drawer-in 230ms var(--popup-ease-out);
+  }
+
+  @keyframes popup-dialog-in {
+    from {
+      opacity: 0;
+      transform: translateY(10px) scale(0.98);
+    }
+  }
+
+  @keyframes popup-backdrop-in {
+    from { background-color: transparent; }
+  }
+
+  @keyframes popup-popover-in {
+    from {
+      opacity: 0;
+      transform: translate(var(--popup-offset-x, 0px), var(--popup-offset-y, 5px)) scale(0.98);
+    }
+  }
+
+  @keyframes popup-drawer-in {
+    from {
+      opacity: 0;
+      transform: translateX(24px);
+    }
+  }
+}

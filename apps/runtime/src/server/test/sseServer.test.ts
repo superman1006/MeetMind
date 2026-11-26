@@ -40,6 +40,27 @@ describe("sseServer", () => {
     removeClient(a.res);
   });
 
+  it("参会者收到会议事件，未参会账号收不到，审批只发给主持人", () => {
+    const host = fakeRes();
+    const member = fakeRes();
+    const outsider = fakeRes();
+    addClient(host.res, "host", "a");
+    addClient(member.res, "member", "b");
+    addClient(outsider.res, "outsider", "c");
+    try {
+      send("meeting", "delta", { text: "会议回复" }, ["host", "member"]);
+      send("meeting", "tool_approval_request", { approvalId: "1" }, ["host"]);
+      expect(host.writes).toHaveLength(2);
+      expect(member.writes).toHaveLength(1);
+      expect(member.writes[0]).toContain("会议回复");
+      expect(outsider.writes).toHaveLength(0);
+    } finally {
+      removeClient(host.res);
+      removeClient(member.res);
+      removeClient(outsider.res);
+    }
+  });
+
   it("移除连接后不再收到", () => {
     const a = fakeRes();
     addClient(a.res);

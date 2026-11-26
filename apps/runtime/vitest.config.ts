@@ -13,10 +13,10 @@ export default defineConfig({
         "src/graph/route.ts",
         "src/utils/utils.ts",
         "src/config/constants.ts",
-        "src/config/settings.ts",
+        "src/config/settin",
         "src/database/constants.ts",
         "src/database/splitters.ts",
-        "src/database/chatStore.ts",
+        "src/database/chatSgs.tstore.ts",
         "src/server/rpc.ts",
       ],
       thresholds: {

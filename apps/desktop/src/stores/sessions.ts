@@ -3,7 +3,19 @@ import { rpc } from "../api/rpcClient.js";
 import { logUserAction } from "../api/logger.js";
 import { useAuthStore } from "./auth.js";
 
-export interface SessionMeta { id: string; title: string; created_at?: string; ended?: boolean }
+export interface SessionMeta {
+  id: string;
+  title: string;
+  created_at?: string;
+  ended?: boolean;
+  archived?: boolean;
+  isHost?: boolean;
+  owner?: string;
+  participants?: string[];
+  running?: boolean;
+  minutesStatus?: "pending" | "writing" | "completed" | "failed" | null;
+  minutesFilename?: string | null;
+}
 
 export const useSessionsStore = defineStore("sessions", {
   state: () => ({
@@ -13,20 +25,21 @@ export const useSessionsStore = defineStore("sessions", {
   actions: {
     /** 从服务端拉「当前用户自己」的会话列表;若没有选中项则默认选第一个。 */
     async load(): Promise<void> {
-      const username = useAuthStore().username;
-      const list = await rpc<SessionMeta[]>("session.list", { username });
+      const auth = useAuthStore();
+      const username = auth.username;
+      const list = await rpc<SessionMeta[]>("session.list", {});
+      // 登录账号可能在请求期间切换，丢弃旧账号的会话列表。
+      if (auth.username !== username) return;
       this.list = list;
-      if (!this.activeId && list.length > 0) {
-        this.activeId = list[0].id;
+      if (!list.some((record) => record.id === this.activeId)) {
+        this.activeId = list.find((record) => !record.archived)?.id ?? "";
       }
     },
     /** 服务端新建一个会话(id 由服务端生成,归属当前用户),插到列表最前并选中。 */
-    async newSession(): Promise<string> {
-      const username = useAuthStore().username;
-      const title = `会话 ${this.list.length + 1}`;
+    async newSession(participants: string[], title: string): Promise<string> {
       logUserAction("新建会话", { title });
-      const meta = await rpc<SessionMeta>("session.create", { title, username });
-      this.list.unshift(meta);
+      const meta = await rpc<SessionMeta>("session.create", { title, participants });
+      if (!this.list.some((record) => record.id === meta.id)) this.list.unshift(meta);
       this.activeId = meta.id;
       return meta.id;
     },
@@ -59,24 +72,10 @@ export const useSessionsStore = defineStore("sessions", {
         }
       }
     },
-    /** 删除会话(服务端级联删消息),并从列表移除;删的是当前会话则切到另一个。 */
-    async remove(id: string): Promise<void> {
-      logUserAction("删除会话", { sessionId: id });
-      await rpc("session.delete", { sessionId: id });
-      const remaining: SessionMeta[] = [];
-      for (const s of this.list) {
-        if (s.id !== id) {
-          remaining.push(s);
-        }
-      }
-      this.list = remaining;
-      if (this.activeId === id) {
-        if (this.list.length > 0) {
-          this.activeId = this.list[0].id;
-        } else {
-          this.activeId = "";
-        }
-      }
+    async archive(sessionId: string, archived: boolean): Promise<void> {
+      await rpc("session.archive", { sessionId, archived });
+      const meeting = this.list.find((record) => record.id === sessionId);
+      if (meeting) meeting.archived = archived;
     },
   },
 });

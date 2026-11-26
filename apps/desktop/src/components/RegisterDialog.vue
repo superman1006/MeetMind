@@ -72,8 +72,8 @@ async function onSubmit(): Promise<void> {
 
 <template>
   <!-- 点遮罩空白处 = 关闭(提交中不关);点对话框本体不冒泡 -->
-  <div class="overlay" @click="!submitting && emit('close')">
-    <form class="dialog" @click.stop @submit.prevent="onSubmit">
+  <div class="overlay popup-overlay" @click="!submitting && emit('close')">
+    <form class="dialog popup-dialog" @click.stop @submit.prevent="onSubmit">
       <h2 class="title">注册新账号</h2>
       <p class="hint">创建一个用于登录 MeetMind 的账号。注册成功后请用新账号登录。</p>
 

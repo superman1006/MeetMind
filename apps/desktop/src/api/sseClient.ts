@@ -14,7 +14,7 @@ export interface UsingToolsPayload { sessionId: string; turnId: string; tool: st
 export interface ToolResultPayload { sessionId: string; turnId: string; name: string; args: Record<string, unknown>; result: string }
 // tool_approval_request:某个 risk>low 的工具执行前,后端挂起等审批。前端据此在输入框上方弹审批框,
 // 用户点同意/拒绝后回 toolApproval RPC(带 approvalId)。
-export interface ToolApprovalRequestPayload { sessionId: string; turnId: string; approvalId: string; tool: string; risk: string; args: Record<string, unknown> }
+export interface ToolApprovalRequestPayload { sessionId: string; turnId: string; approvalId: string; tool: string; risk: string; args?: Record<string, unknown> }
 // turn_end:某个 Agent 发言结束。next_agent=接下来轮到谁,done=整轮是否到此为止。
 export interface TurnEndPayload { sessionId: string; turnId: string; next_agent: string | null; done: boolean; used_rag: boolean }
 // round_done:一整轮讨论彻底结束。
@@ -28,6 +28,10 @@ export interface SummaryErrorPayload { sessionId: string; message: string }
 
 // 一组回调:每种事件来时分别调哪个函数处理(由界面/状态层传进来)。
 export interface SseHandlers {
+  onConnected?: () => void;
+  onRoundStart?: (p: { sessionId: string; roundId: string; requirement: string; resume: boolean }) => void;
+  onPlanUpdated?: (p: { sessionId: string }) => void;
+  onSessionUpdated?: (p: { sessionId: string }) => void;
   onTurnStart: (p: TurnStartPayload) => void;
   onDelta: (p: DeltaPayload) => void;
   onUsingTools: (p: UsingToolsPayload) => void;
@@ -54,12 +58,22 @@ export function openEvents(handlers: SseHandlers): EventSource {
   // 连接就绪 / 连接层出错只记一行,逐条 delta 太碎不打日志。
   es.onopen = () => {
     logger.info({ url }, "← 事件流已连接");
+    handlers.onConnected?.();
   };
 
 
   // 下面这些 回调函数 后面会被 后端 推来的事件触发(根据类型)
   // 下面每个 addEventListener("类型名", ...) = “收到这类事件时怎么办”;
   // e.data 是服务器推来的 JSON 字符串,先 parse 还原成对象(含 sessionId),再转交给上层 handler。
+  es.addEventListener("round_start", (e) => {
+    handlers.onRoundStart?.(JSON.parse((e as MessageEvent).data));
+  });
+  es.addEventListener("plan_updated", (e) => {
+    handlers.onPlanUpdated?.(JSON.parse((e as MessageEvent).data));
+  });
+  es.addEventListener("session_updated", (e) => {
+    handlers.onSessionUpdated?.(JSON.parse((e as MessageEvent).data));
+  });
   es.addEventListener("turn_start", (e) => {
     handlers.onTurnStart(JSON.parse((e as MessageEvent).data));
   });

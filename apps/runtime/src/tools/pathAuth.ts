@@ -46,3 +46,8 @@ export function authorizePath(target: string): AuthResult {
   }
   return { ok: true, abs, reason: "" };
 }
+
+export function isMeetingSourceEntry(name: string): boolean {
+  return !name.startsWith(".") && !["node_modules", "dist", "target"].includes(name)
+    && !/\.(pem|key|p12|pfx)$/i.test(name);
+}

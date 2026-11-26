@@ -28,8 +28,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
 </script>
 
 <template>
-  <div class="overlay" @click="tryClose">
-    <div class="dialog" @click.stop>
+  <div class="overlay popup-overlay" @click="tryClose">
+    <div class="dialog popup-dialog" @click.stop>
       <h2 class="title">会议已结束</h2>
 
       <div v-if="status === 'summarizing'" class="body">
